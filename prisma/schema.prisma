@@ -1,0 +1,108 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// User model with role-based access
+model User {
+  id        String    @id @default(uuid())
+  email     String    @unique
+  role      String    @default("user") // "user" or "admin"
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  accounts  Account[]
+
+  @@map("users")
+}
+
+// Account model with user_id for ownership
+model Account {
+  id                Int      @id @default(autoincrement())
+  userId            String?  @map("user_id")
+  email             String   @unique
+  appPassword       String   @map("app_password")
+  senderName        String?  @map("sender_name")
+  smtpHost          String   @map("smtp_host")
+  smtpPort          Int      @map("smtp_port")
+  imapHost          String   @map("imap_host")
+  imapPort          Int      @map("imap_port")
+  dailyWarmupQuota  Int      @default(2) @map("daily_warmup_quota") // 2-5 emails per day
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sentLogs    Log[]    @relation("SenderLogs")
+  receivedLogs Log[]   @relation("RecipientLogs")
+
+  @@map("accounts")
+}
+
+// Recipient model (kept for backward compatibility)
+model Recipient {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("recipients")
+}
+
+// SendTemplates for first email
+model SendTemplate {
+  id        Int      @id @default(autoincrement())
+  subject   String
+  body      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("send_templates")
+}
+
+// ReplyTemplates for auto-replies
+model ReplyTemplate {
+  id        Int      @id @default(autoincrement())
+  text      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("reply_templates")
+}
+
+// Old Template model (kept for backward compatibility)
+model Template {
+  id        Int      @id @default(autoincrement())
+  subject   String
+  body      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("templates")
+}
+
+// Log model with relations
+model Log {
+  id          Int      @id @default(autoincrement())
+  timestamp   DateTime @default(now())
+  senderId    Int?     @map("sender_id")
+  recipientId Int?     @map("recipient_id")
+  sender      String
+  recipient   String
+  subject     String
+  status      String
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  senderAccount    Account? @relation("SenderLogs", fields: [senderId], references: [id], onDelete: SetNull)
+  recipientAccount Account? @relation("RecipientLogs", fields: [recipientId], references: [id], onDelete: SetNull)
+
+  @@map("logs")
+}
