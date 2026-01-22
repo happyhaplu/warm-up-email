@@ -15,12 +15,11 @@ export default function Layout({ children }: LayoutProps) {
     await logout();
   };
 
-  // User navigation - only Dashboard, Mailboxes, and Logs
-  // Recipients and Templates are admin-only
+  // User navigation - only Dashboard and Logs
+  // Mailboxes are managed in the Dashboard
   const navItems = [
-    { href: '/user/dashboard', label: 'Dashboard' },
-    { href: '/dashboard/mailboxes', label: 'Mailboxes' },
-    { href: '/dashboard/logs', label: 'Logs' },
+    { href: '/user/dashboard', label: '📊 Dashboard' },
+    { href: '/user/logs', label: '📋 Logs' },
   ];
 
   // Show loading state while auth is initializing

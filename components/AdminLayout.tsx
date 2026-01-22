@@ -41,6 +41,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
   const adminNavItems = [
     { href: '/admin/dashboard', label: '📊 Overview' },
+    { href: '/admin/mailboxes', label: '📬 Mailboxes' },
     { href: '/admin/templates', label: '📝 Templates' },
     { href: '/admin/warmup', label: '🔥 Warmup Control' },
     { href: '/admin/logs', label: '📋 Logs' },

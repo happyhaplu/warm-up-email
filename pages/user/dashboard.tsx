@@ -12,6 +12,24 @@ interface Mailbox {
   smtpPort: number;
   imapHost: string;
   imapPort: number;
+  warmupEnabled: boolean;
+  warmupStartDate: string | null;
+  warmupMaxDaily: number;
+  dailyWarmupQuota: number;
+  deliverability: number;
+  replyRate: number;
+  totalSent: number;
+  totalFailed: number;
+  warmupStartCount?: number;
+  warmupIncreaseBy?: number;
+  warmupReplyRate?: number;
+  emailsSent?: number;
+  totalReceived?: number;
+  totalReplied?: number;
+  inbox?: number;
+  spam?: number;
+  others?: number;
+  undelivered?: number;
 }
 
 interface Stats {
@@ -63,6 +81,16 @@ export default function UserDashboard() {
   const [showBulkQuotaEdit, setShowBulkQuotaEdit] = useState(false);
   const [bulkQuotaValue, setBulkQuotaValue] = useState(2);
   const [updatingQuota, setUpdatingQuota] = useState(false);
+  const [togglingWarmup, setTogglingWarmup] = useState<Set<number>>(new Set());
+  const [showWarmupSettings, setShowWarmupSettings] = useState<number | null>(null);
+  const [showReport, setShowReport] = useState<number | null>(null);
+  const [warmupSettings, setWarmupSettings] = useState({
+    warmupStartCount: 3,
+    warmupIncreaseBy: 3,
+    warmupMaxDaily: 10,
+    warmupReplyRate: 35,
+  });
+  const [savingWarmupSettings, setSavingWarmupSettings] = useState(false);
 
   // Check if user exists in localStorage as fallback
   const hasStoredUser = (): boolean => {
@@ -395,15 +423,126 @@ export default function UserDashboard() {
       );
 
       await Promise.all(updatePromises);
-      setShowBulkQuotaEdit(false);
       setSelectedMailboxes(new Set());
-      await loadData();
-      alert(`✅ Updated quota to ${bulkQuotaValue} emails/day for ${selectedMailboxes.size} mailbox(es)`);
+      setShowBulkQuotaEdit(false);
+      loadData();
+      alert(`Successfully updated quota for ${selectedMailboxes.size} mailbox(es)`);
     } catch (error) {
       console.error('Error updating quota:', error);
-      alert('❌ Failed to update quota for some mailboxes');
+      alert('Failed to update quota for some mailboxes');
     } finally {
       setUpdatingQuota(false);
+    }
+  };
+
+  const handleWarmupToggle = async (mailboxId: number, currentStatus: boolean) => {
+    setTogglingWarmup(prev => new Set([...prev, mailboxId]));
+    
+    try {
+      const res = await authFetch('/api/warmup/manage', {
+        method: 'POST',
+        body: JSON.stringify({
+          mailboxId,
+          action: currentStatus ? 'stop' : 'start',
+        }),
+      });
+
+      if (res.ok) {
+        loadData();
+      } else {
+        const error = await res.json();
+        alert(`Failed to ${currentStatus ? 'stop' : 'start'} warmup: ${error.error}`);
+      }
+    } catch (error) {
+      console.error('Error toggling warmup:', error);
+      alert('Failed to toggle warmup');
+    } finally {
+      setTogglingWarmup(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(mailboxId);
+        return newSet;
+      });
+    }
+  };
+
+  const getSetupScore = (mailbox: Mailbox): number => {
+    let score = 0;
+    
+    // Basic fields (40%)
+    if (mailbox.email) score += 20;
+    if (mailbox.senderName) score += 20;
+    
+    // SMTP/IMAP configured (20%)
+    if (mailbox.smtpHost && mailbox.smtpPort) score += 10;
+    if (mailbox.imapHost && mailbox.imapPort) score += 10;
+    
+    // Warmup configured (20%)
+    if (mailbox.warmupEnabled) score += 10;
+    if (mailbox.warmupStartDate) score += 10;
+    
+    // Activity/Performance (20%)
+    if (mailbox.totalSent > 0) score += 10;
+    if (mailbox.deliverability >= 80) score += 10;
+    
+    return score;
+  };
+
+  const getWarmupStatus = (mailbox: Mailbox): string => {
+    if (!mailbox.warmupEnabled) return 'Inactive';
+    if (!mailbox.warmupStartDate) return 'Enabled';
+    
+    const startDate = new Date(mailbox.warmupStartDate);
+    const now = new Date();
+    const daysSince = Math.floor((now.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+    
+    if (daysSince === 0) return 'Running';
+    if (daysSince < 7) return 'Warming';
+    if (daysSince < 30) return 'Active';
+    return 'Established';
+  };
+
+  const formatDate = (dateStr: string | null): string => {
+    if (!dateStr) return 'Not started';
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  const handleOpenWarmupSettings = (mailbox: Mailbox) => {
+    setWarmupSettings({
+      warmupStartCount: (mailbox as any).warmupStartCount || 3,
+      warmupIncreaseBy: (mailbox as any).warmupIncreaseBy || 3,
+      warmupMaxDaily: mailbox.warmupMaxDaily || 10,
+      warmupReplyRate: (mailbox as any).warmupReplyRate || 35,
+    });
+    setShowWarmupSettings(mailbox.id);
+  };
+
+  const handleSaveWarmupSettings = async () => {
+    if (!showWarmupSettings) return;
+    
+    setSavingWarmupSettings(true);
+    try {
+      const res = await authFetch('/api/user/warmup-settings', {
+        method: 'POST',
+        body: JSON.stringify({
+          mailboxId: showWarmupSettings,
+          ...warmupSettings,
+        }),
+      });
+
+      if (res.ok) {
+        setShowWarmupSettings(null);
+        loadData();
+        alert('✅ Warmup settings saved successfully!');
+      } else {
+        const error = await res.json();
+        alert(`❌ Failed to save: ${error.error}`);
+      }
+    } catch (error) {
+      console.error('Error saving warmup settings:', error);
+      alert('❌ Failed to save warmup settings');
+    } finally {
+      setSavingWarmupSettings(false);
     }
   };
 
@@ -803,61 +942,147 @@ user2@gmail.com,yyyy yyyy yyyy yyyy,User Two,smtp.gmail.com,587,imap.gmail.com,9
                             className="w-4 h-4 text-blue-600 rounded"
                           />
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Sender Name</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">SMTP</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">IMAP</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email Address</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Setup Score</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Warmup Status</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Active/Inactive</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tags</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Deliverability</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Warmup Start Date</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
                       {mailboxes.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="px-6 py-8 text-center text-gray-500">
+                          <td colSpan={9} className="px-6 py-8 text-center text-gray-500">
                             No mailboxes connected yet. Click "Add Mailbox" to get started.
                           </td>
                         </tr>
                       ) : paginatedMailboxes.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="px-6 py-8 text-center text-gray-500">
+                          <td colSpan={9} className="px-6 py-8 text-center text-gray-500">
                             No mailboxes on this page.
                           </td>
                         </tr>
                       ) : (
-                        paginatedMailboxes.map((mailbox) => (
-                          <tr key={mailbox.id} className={selectedMailboxes.has(mailbox.id) ? 'bg-blue-50' : ''}>
-                            <td className="px-6 py-4">
-                              <input
-                                type="checkbox"
-                                checked={selectedMailboxes.has(mailbox.id)}
-                                onChange={() => toggleSelectMailbox(mailbox.id)}
-                                className="w-4 h-4 text-blue-600 rounded"
-                              />
-                            </td>
-                            <td className="px-6 py-4 text-sm font-medium">{mailbox.email}</td>
-                            <td className="px-6 py-4 text-sm">{mailbox.senderName || '-'}</td>
-                            <td className="px-6 py-4 text-sm text-gray-500">
-                              {mailbox.smtpHost}:{mailbox.smtpPort}
-                            </td>
-                            <td className="px-6 py-4 text-sm text-gray-500">
-                              {mailbox.imapHost}:{mailbox.imapPort}
-                            </td>
-                            <td className="px-6 py-4">
-                              <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded">
-                                Connected
-                              </span>
-                            </td>
-                            <td className="px-6 py-4">
-                              <button
-                                onClick={() => handleDeleteMailbox(mailbox.id)}
-                                className="text-red-600 hover:text-red-800"
-                              >
-                                Remove
-                              </button>
-                            </td>
-                          </tr>
-                        ))
+                        paginatedMailboxes.map((mailbox) => {
+                          const setupScore = getSetupScore(mailbox);
+                          const warmupStatus = getWarmupStatus(mailbox);
+                          const isToggling = togglingWarmup.has(mailbox.id);
+                          
+                          return (
+                            <tr key={mailbox.id} className={selectedMailboxes.has(mailbox.id) ? 'bg-blue-50' : ''}>
+                              <td className="px-6 py-4">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedMailboxes.has(mailbox.id)}
+                                  onChange={() => toggleSelectMailbox(mailbox.id)}
+                                  className="w-4 h-4 text-blue-600 rounded"
+                                />
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="text-sm font-medium text-gray-900">{mailbox.email}</div>
+                                <div className="text-xs text-gray-500">{mailbox.senderName || 'No name'}</div>
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="flex items-center">
+                                  <div className="w-full bg-gray-200 rounded-full h-2 mr-2">
+                                    <div 
+                                      className={`h-2 rounded-full ${
+                                        setupScore === 100 ? 'bg-green-500' :
+                                        setupScore >= 75 ? 'bg-blue-500' :
+                                        setupScore >= 50 ? 'bg-yellow-500' : 'bg-red-500'
+                                      }`}
+                                      style={{ width: `${setupScore}%` }}
+                                    ></div>
+                                  </div>
+                                  <span className="text-sm font-medium text-gray-700">{setupScore}%</span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className={`px-2 py-1 text-xs font-medium rounded ${
+                                  warmupStatus === 'Established' ? 'bg-green-100 text-green-800' :
+                                  warmupStatus === 'Active' ? 'bg-blue-100 text-blue-800' :
+                                  warmupStatus === 'Running' ? 'bg-purple-100 text-purple-800' :
+                                  warmupStatus === 'Warming' ? 'bg-yellow-100 text-yellow-800' :
+                                  warmupStatus === 'Enabled' ? 'bg-cyan-100 text-cyan-800' :
+                                  'bg-gray-100 text-gray-800'
+                                }`}>
+                                  {warmupStatus}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4">
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={mailbox.warmupEnabled}
+                                    onChange={() => handleWarmupToggle(mailbox.id, mailbox.warmupEnabled)}
+                                    disabled={isToggling}
+                                    className="sr-only peer"
+                                  />
+                                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                                  <span className="ml-3 text-sm font-medium text-gray-900">
+                                    {isToggling ? 'Loading...' : mailbox.warmupEnabled ? 'Active' : 'Inactive'}
+                                  </span>
+                                </label>
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className="px-2 py-1 text-xs font-medium bg-purple-100 text-purple-800 rounded">
+                                  Gmail
+                                </span>
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="flex items-center">
+                                  <div className="w-full bg-gray-200 rounded-full h-2 mr-2 max-w-[100px]">
+                                    <div
+                                      className={`h-2 rounded-full ${
+                                        mailbox.deliverability >= 90 ? 'bg-green-500' :
+                                        mailbox.deliverability >= 70 ? 'bg-blue-500' :
+                                        mailbox.deliverability >= 50 ? 'bg-yellow-500' :
+                                        mailbox.deliverability > 0 ? 'bg-red-500' : 'bg-gray-400'
+                                      }`}
+                                      style={{ width: `${mailbox.deliverability}%` }}
+                                    ></div>
+                                  </div>
+                                  <span className="text-sm font-medium text-gray-700">
+                                    {mailbox.deliverability}%
+                                  </span>
+                                </div>
+                                {mailbox.totalSent > 0 && (
+                                  <div className="text-xs text-gray-500 mt-1">
+                                    {mailbox.totalSent} sent, {mailbox.totalFailed} failed
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-6 py-4 text-sm text-gray-500">
+                                {formatDate(mailbox.warmupStartDate)}
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => handleOpenWarmupSettings(mailbox)}
+                                    className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
+                                  >
+                                    ⚙️ Settings
+                                  </button>
+                                  <button
+                                    onClick={() => setShowReport(mailbox.id)}
+                                    className="px-3 py-1 text-xs bg-green-500 text-white rounded hover:bg-green-600"
+                                  >
+                                    📊 Report
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteMailbox(mailbox.id)}
+                                    className="px-3 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600"
+                                  >
+                                    🗑️ Remove
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
@@ -924,6 +1149,140 @@ user2@gmail.com,yyyy yyyy yyyy yyyy,User Two,smtp.gmail.com,587,imap.gmail.com,9
           )}
         </div>
       </div>
+
+      {/* Warmup Settings Modal */}
+      {showWarmupSettings && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-xl font-bold mb-4">🔥 Warmup Settings</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Start with emails/day (Recommended 3)
+                </label>
+                <input
+                  type="number"
+                  value={warmupSettings.warmupStartCount}
+                  onChange={(e) => setWarmupSettings({...warmupSettings, warmupStartCount: parseInt(e.target.value) || 3})}
+                  min="1"
+                  max="10"
+                  className="w-full p-2 border rounded"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Increase by emails every day (Recommended 3)
+                </label>
+                <input
+                  type="number"
+                  value={warmupSettings.warmupIncreaseBy}
+                  onChange={(e) => setWarmupSettings({...warmupSettings, warmupIncreaseBy: parseInt(e.target.value) || 3})}
+                  min="1"
+                  max="5"
+                  className="w-full p-2 border rounded"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Maximum emails to be sent per day (Recommended 10)
+                </label>
+                <input
+                  type="number"
+                  value={warmupSettings.warmupMaxDaily}
+                  onChange={(e) => setWarmupSettings({...warmupSettings, warmupMaxDaily: parseInt(e.target.value) || 10})}
+                  min="5"
+                  max="20"
+                  className="w-full p-2 border rounded"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Reply rate 25-45% (Recommended 35%)
+                </label>
+                <input
+                  type="number"
+                  value={warmupSettings.warmupReplyRate}
+                  onChange={(e) => setWarmupSettings({...warmupSettings, warmupReplyRate: parseInt(e.target.value) || 35})}
+                  min="25"
+                  max="45"
+                  className="w-full p-2 border rounded"
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={handleSaveWarmupSettings}
+                disabled={savingWarmupSettings}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+              >
+                {savingWarmupSettings ? 'Saving...' : 'Save Settings'}
+              </button>
+              <button
+                onClick={() => setShowWarmupSettings(null)}
+                className="flex-1 px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Report Modal */}
+      {showReport && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4">
+            <h3 className="text-xl font-bold mb-4">📊 Mailbox Report</h3>
+            {(() => {
+              const mailbox = mailboxes.find(m => m.id === showReport);
+              return mailbox ? (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-blue-50 p-4 rounded">
+                    <div className="text-sm text-blue-600 font-medium">Emails Sent</div>
+                    <div className="text-2xl font-bold text-blue-900">{mailbox.emailsSent || mailbox.totalSent || 0}</div>
+                  </div>
+                  <div className="bg-green-50 p-4 rounded">
+                    <div className="text-sm text-green-600 font-medium">Total Received</div>
+                    <div className="text-2xl font-bold text-green-900">{mailbox.totalReceived || 0}</div>
+                  </div>
+                  <div className="bg-purple-50 p-4 rounded">
+                    <div className="text-sm text-purple-600 font-medium">Total Replied</div>
+                    <div className="text-2xl font-bold text-purple-900">{mailbox.totalReplied || 0}</div>
+                  </div>
+                  <div className="bg-yellow-50 p-4 rounded">
+                    <div className="text-sm text-yellow-600 font-medium">Inbox</div>
+                    <div className="text-2xl font-bold text-yellow-900">{mailbox.inbox || 0}</div>
+                  </div>
+                  <div className="bg-red-50 p-4 rounded">
+                    <div className="text-sm text-red-600 font-medium">Spam</div>
+                    <div className="text-2xl font-bold text-red-900">{mailbox.spam || 0}</div>
+                  </div>
+                  <div className="bg-gray-50 p-4 rounded">
+                    <div className="text-sm text-gray-600 font-medium">Others</div>
+                    <div className="text-2xl font-bold text-gray-900">{mailbox.others || 0}</div>
+                  </div>
+                  <div className="bg-orange-50 p-4 rounded">
+                    <div className="text-sm text-orange-600 font-medium">Undelivered</div>
+                    <div className="text-2xl font-bold text-orange-900">{mailbox.undelivered || mailbox.totalFailed || 0}</div>
+                  </div>
+                  <div className="bg-cyan-50 p-4 rounded">
+                    <div className="text-sm text-cyan-600 font-medium">Deliverability</div>
+                    <div className="text-2xl font-bold text-cyan-900">{mailbox.deliverability}%</div>
+                  </div>
+                </div>
+              ) : null;
+            })()}
+            <div className="mt-6">
+              <button
+                onClick={() => setShowReport(null)}
+                className="w-full px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 }

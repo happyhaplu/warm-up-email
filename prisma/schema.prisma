@@ -38,6 +38,9 @@ model Account {
   warmupStartDate   DateTime? @map("warmup_start_date") // When warmup began for this mailbox
   warmupEnabled     Boolean  @default(true) @map("warmup_enabled") // Whether warmup is active
   warmupMaxDaily    Int      @default(20) @map("warmup_max_daily") // Cap at 10-20 emails/day
+  warmupStartCount  Int      @default(3) @map("warmup_start_count") // Start with N emails/day
+  warmupIncreaseBy  Int      @default(3) @map("warmup_increase_by") // Increase by N every day
+  warmupReplyRate   Int      @default(35) @map("warmup_reply_rate") // Target reply rate % (25-45)
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
   

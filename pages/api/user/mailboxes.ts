@@ -11,15 +11,56 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
         orderBy: { createdAt: 'desc' },
       });
 
-      const mailboxes = accounts.map((account) => ({
-        id: account.id,
-        email: account.email,
-        senderName: account.senderName,
-        smtpHost: account.smtpHost,
-        smtpPort: account.smtpPort,
-        imapHost: account.imapHost,
-        imapPort: account.imapPort,
-        status: 'connected',
+      // Get logs statistics for each account
+      const mailboxes = await Promise.all(accounts.map(async (account) => {
+        const logs = await prisma.log.findMany({
+          where: { senderId: account.id },
+          select: { status: true },
+        });
+
+        const totalSent = logs.filter(log => log.status === 'SENT' || log.status === 'REPLIED').length;
+        const totalFailed = logs.filter(log => log.status === 'FAILED').length;
+        const totalReplied = logs.filter(log => log.status === 'REPLIED').length;
+        
+        // Calculate deliverability: (successful / total) * 100
+        const totalAttempts = totalSent + totalFailed;
+        const deliverability = totalAttempts > 0 
+          ? Math.round((totalSent / totalAttempts) * 100) 
+          : 0;
+
+        // Calculate reply rate
+        const replyRate = totalSent > 0 
+          ? Math.round((totalReplied / totalSent) * 100)
+          : 0;
+
+        return {
+          id: account.id,
+          email: account.email,
+          senderName: account.senderName,
+          smtpHost: account.smtpHost,
+          smtpPort: account.smtpPort,
+          imapHost: account.imapHost,
+          imapPort: account.imapPort,
+          warmupEnabled: account.warmupEnabled,
+          warmupStartDate: account.warmupStartDate,
+          warmupMaxDaily: account.warmupMaxDaily,
+          dailyWarmupQuota: account.dailyWarmupQuota,
+          warmupStartCount: account.warmupStartCount,
+          warmupIncreaseBy: account.warmupIncreaseBy,
+          warmupReplyRate: account.warmupReplyRate,
+          status: 'connected',
+          deliverability,
+          replyRate,
+          totalSent,
+          totalFailed,
+          emailsSent: totalSent,
+          totalReceived: 0, // TODO: Get from logs
+          totalReplied: totalReplied,
+          inbox: 0, // TODO: Calculate from logs
+          spam: 0, // TODO: Calculate from logs
+          others: 0, // TODO: Calculate from logs
+          undelivered: totalFailed,
+        };
       }));
 
       res.status(200).json(mailboxes);
