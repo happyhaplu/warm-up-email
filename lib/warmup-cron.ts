@@ -358,7 +358,7 @@ class WarmupCronService {
           port: account.imapPort,
           tls: true,
           tlsOptions: { rejectUnauthorized: false },
-          authTimeout: 10000,
+          authTimeout: 30000,
         },
       };
 

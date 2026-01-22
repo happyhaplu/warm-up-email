@@ -150,7 +150,7 @@ class WarmupService {
           port: sender.imapPort,
           tls: true,
           tlsOptions: { rejectUnauthorized: false },
-          authTimeout: 10000,
+          authTimeout: 30000,
         },
       };
 

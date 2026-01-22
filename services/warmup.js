@@ -172,7 +172,7 @@ async function checkInbox(senderEmail, appPassword, limit = 5) {
         port: IMAP_PORT,
         tls: true,
         tlsOptions: { rejectUnauthorized: false },
-        authTimeout: 10000
+        authTimeout: 30000
       }
     };
 
