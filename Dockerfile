@@ -12,8 +12,8 @@ RUN npm install -g pnpm
 COPY package.json ./
 COPY prisma ./prisma/
 
-# Install dependencies
-RUN pnpm install
+# Install dependencies (including devDependencies for build)
+RUN pnpm install --prod=false
 
 # Generate Prisma Client
 RUN pnpm prisma generate
