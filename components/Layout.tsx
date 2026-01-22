@@ -20,6 +20,7 @@ export default function Layout({ children }: LayoutProps) {
   const navItems = [
     { href: '/user/dashboard', label: '📊 Dashboard' },
     { href: '/user/logs', label: '📋 Logs' },
+    { href: 'https://outcraftly.com/', label: '📧 Send Cold Emails', external: true },
   ];
 
   // Show loading state while auth is initializing
@@ -47,6 +48,19 @@ export default function Layout({ children }: LayoutProps) {
               <div className="hidden sm:ml-8 sm:flex sm:space-x-8">
                 {navItems.map((item) => {
                   const isActive = router.pathname === item.href;
+                  if (item.external) {
+                    return (
+                      <a
+                        key={item.href}
+                        href={item.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center px-1 pt-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:border-gray-300 hover:text-gray-700"
+                      >
+                        {item.label}
+                      </a>
+                    );
+                  }
                   return (
                     <Link
                       key={item.href}
