@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { requireAuth } from '../../../lib/api-auth';
 import prisma from '../../../lib/prisma';
+import { getDailyLimit, getDaysSinceStart, getWarmupScheduleInfo } from '../../../lib/warmup-utils';
 
 async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
   if (req.method !== 'GET') {
@@ -17,6 +18,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
         email: true,
         dailyWarmupQuota: true,
         senderName: true,
+        warmupStartDate: true,
+        warmupEnabled: true,
+        warmupMaxDaily: true,
       },
       orderBy: {
         email: 'asc',
@@ -32,6 +36,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
     // Get stats for each mailbox
     const stats = await Promise.all(
       accounts.map(async (account: any) => {
+        // Calculate warmup progress
+        let dayNumber = 0;
+        let dailyLimit = account.dailyWarmupQuota;
+        let warmupPhase = 'Not Started';
+        
+        if (account.warmupStartDate) {
+          dayNumber = getDaysSinceStart(account.warmupStartDate);
+          dailyLimit = getDailyLimit(dayNumber, account.warmupMaxDaily);
+          const scheduleInfo = getWarmupScheduleInfo(dayNumber, account.warmupMaxDaily);
+          warmupPhase = scheduleInfo.phase;
+        }
+
         // Count sent emails today
         const sentToday = await prisma.log.count({
           where: {
@@ -78,17 +94,37 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
           },
         });
 
+        // Get warmup log for today
+        const warmupLog = await prisma.warmupLog.findUnique({
+          where: {
+            mailboxId_date: {
+              mailboxId: account.id,
+              date: today,
+            },
+          },
+        });
+
         return {
           mailboxId: account.id,
           email: account.email,
           senderName: account.senderName,
-          dailyQuota: account.dailyWarmupQuota,
+          dailyQuota: dailyLimit,
+          warmupEnabled: account.warmupEnabled,
+          warmupStartDate: account.warmupStartDate,
+          warmupDayNumber: dayNumber,
+          warmupPhase,
           sentToday,
           repliesToday,
-          remaining: Math.max(0, account.dailyWarmupQuota - sentToday),
+          remaining: Math.max(0, dailyLimit - sentToday),
           totalSent,
           lastSentAt: lastSent?.timestamp || null,
-          percentComplete: Math.round((sentToday / account.dailyWarmupQuota) * 100),
+          percentComplete: dailyLimit > 0 ? Math.round((sentToday / dailyLimit) * 100) : 0,
+          warmupLog: warmupLog ? {
+            dayNumber: warmupLog.dayNumber,
+            sentCount: warmupLog.sentCount,
+            repliedCount: warmupLog.repliedCount,
+            dailyLimit: warmupLog.dailyLimit,
+          } : null,
         };
       })
     );

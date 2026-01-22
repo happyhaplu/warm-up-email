@@ -35,12 +35,16 @@ model Account {
   imapHost          String   @map("imap_host")
   imapPort          Int      @map("imap_port")
   dailyWarmupQuota  Int      @default(2) @map("daily_warmup_quota") // 2-5 emails per day
+  warmupStartDate   DateTime? @map("warmup_start_date") // When warmup began for this mailbox
+  warmupEnabled     Boolean  @default(true) @map("warmup_enabled") // Whether warmup is active
+  warmupMaxDaily    Int      @default(20) @map("warmup_max_daily") // Cap at 10-20 emails/day
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
   
-  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  sentLogs    Log[]    @relation("SenderLogs")
-  receivedLogs Log[]   @relation("RecipientLogs")
+  user         User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sentLogs     Log[]       @relation("SenderLogs")
+  receivedLogs Log[]       @relation("RecipientLogs")
+  warmupLogs   WarmupLog[]
 
   @@map("accounts")
 }
@@ -105,4 +109,22 @@ model Log {
   recipientAccount Account? @relation("RecipientLogs", fields: [recipientId], references: [id], onDelete: SetNull)
 
   @@map("logs")
+}
+
+// WarmupLog model for tracking daily warmup activity
+model WarmupLog {
+  id          Int      @id @default(autoincrement())
+  mailboxId   Int      @map("mailbox_id")
+  date        DateTime @db.Date
+  dayNumber   Int      @map("day_number") // Days since warmup start
+  sentCount   Int      @map("sent_count") @default(0)
+  repliedCount Int     @map("replied_count") @default(0)
+  dailyLimit  Int      @map("daily_limit") // What the limit was for this day
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  mailbox Account @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+
+  @@unique([mailboxId, date])
+  @@map("warmup_logs")
 }

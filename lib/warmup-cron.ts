@@ -1,6 +1,16 @@
 import nodemailer from 'nodemailer';
 import imaps from 'imap-simple';
 import prisma from './prisma';
+import {
+  getDailyLimit,
+  getDaysSinceStart,
+  getRandomSendOffset,
+  getRandomReplyDelay,
+  getRandomSendDelay,
+  randomizeSubject,
+  randomizeBody,
+  canSendToday,
+} from './warmup-utils';
 
 interface DailyQuotaInfo {
   mailboxId: number;
@@ -8,6 +18,8 @@ interface DailyQuotaInfo {
   dailyQuota: number;
   sentToday: number;
   remaining: number;
+  dayNumber: number;
+  warmupStartDate: Date | null;
 }
 
 class WarmupCronService {
@@ -78,7 +90,7 @@ class WarmupCronService {
       const quotaInfo = await this.getMailboxQuotaInfo();
 
       if (quotaInfo.length === 0) {
-        console.log('📭 No mailboxes configured');
+        console.log('📭 No mailboxes configured for warmup');
         return;
       }
 
@@ -87,17 +99,38 @@ class WarmupCronService {
 
       if (mailboxesWithQuota.length === 0) {
         console.log('✅ All mailboxes have reached their daily quota');
+        quotaInfo.forEach(m => {
+          console.log(`   ${m.email}: Day ${m.dayNumber}, ${m.sentToday}/${m.dailyQuota} sent`);
+        });
         return;
       }
 
-      console.log(`📊 ${mailboxesWithQuota.length} mailbox(es) have quota remaining`);
+      console.log(`📊 ${mailboxesWithQuota.length} mailbox(es) have quota remaining:`);
+      mailboxesWithQuota.forEach(m => {
+        console.log(`   ${m.email}: Day ${m.dayNumber}, ${m.sentToday}/${m.dailyQuota} sent, ${m.remaining} remaining`);
+      });
 
-      // Send from one mailbox per cycle (to spread out the sending)
-      const mailbox = mailboxesWithQuota[0]; // Could randomize this
-      await this.sendWarmupEmail(mailbox.mailboxId);
+      // Randomize order to prevent pattern detection
+      const shuffled = [...mailboxesWithQuota].sort(() => Math.random() - 0.5);
 
-      // Check for replies
-      await this.checkAndReplyToInbox(mailbox.mailboxId);
+      // Send from multiple mailboxes with random delays between sends
+      for (const mailbox of shuffled) {
+        if (!canSendToday(mailbox.sentToday, mailbox.dailyQuota)) {
+          continue;
+        }
+
+        // Add random delay between sends (2-10 minutes)
+        if (mailbox !== shuffled[0]) {
+          const delay = getRandomSendDelay();
+          console.log(`⏳ Waiting ${Math.round(delay / 1000 / 60)} minutes before next send...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+
+        await this.sendWarmupEmail(mailbox.mailboxId);
+
+        // Check for replies after sending
+        await this.checkAndReplyToInbox(mailbox.mailboxId);
+      }
 
       this.lastSendTime = new Date();
     } catch (error) {
@@ -106,54 +139,91 @@ class WarmupCronService {
   }
 
   /**
-   * Get quota information for all mailboxes
+   * Get quota information for all mailboxes with gradual ramp-up
    */
   private async getMailboxQuotaInfo(): Promise<DailyQuotaInfo[]> {
     const accounts = await prisma.account.findMany({
       where: {
         email: { not: undefined },
+        warmupEnabled: true,
       },
       select: {
         id: true,
         email: true,
+        warmupStartDate: true,
+        warmupMaxDaily: true,
         createdAt: true,
-        updatedAt: true,
-        userId: true,
-        appPassword: true,
-        senderName: true,
-        smtpHost: true,
-        smtpPort: true,
-        imapHost: true,
-        imapPort: true,
       },
     });
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
 
     const quotaInfo: DailyQuotaInfo[] = [];
 
     for (const account of accounts) {
+      // Initialize warmup start date if not set
+      let warmupStartDate = account.warmupStartDate;
+      if (!warmupStartDate) {
+        warmupStartDate = new Date();
+        await prisma.account.update({
+          where: { id: account.id },
+          data: { warmupStartDate },
+        });
+      }
+
+      // Calculate days since warmup start
+      const dayNumber = getDaysSinceStart(warmupStartDate);
+      
+      // Get daily limit based on ramp-up schedule
+      const dailyQuota = getDailyLimit(dayNumber, account.warmupMaxDaily);
+
       // Count emails sent today from this mailbox
       const sentToday = await prisma.log.count({
         where: {
           senderId: account.id,
           timestamp: {
             gte: today,
+            lt: tomorrow,
           },
           status: 'sent',
         },
       });
 
-      const dailyQuota = 10; // Default daily warmup quota
       const remaining = Math.max(0, dailyQuota - sentToday);
+
+      // Update or create warmup log for today
+      await prisma.warmupLog.upsert({
+        where: {
+          mailboxId_date: {
+            mailboxId: account.id,
+            date: today,
+          },
+        },
+        update: {
+          sentCount: sentToday,
+          dailyLimit: dailyQuota,
+          dayNumber,
+        },
+        create: {
+          mailboxId: account.id,
+          date: today,
+          dayNumber,
+          sentCount: sentToday,
+          dailyLimit: dailyQuota,
+        },
+      });
 
       quotaInfo.push({
         mailboxId: account.id,
         email: account.email!,
-        dailyQuota: dailyQuota,
+        dailyQuota,
         sentToday,
         remaining,
+        dayNumber,
+        warmupStartDate,
       });
     }
 
@@ -199,8 +269,12 @@ class WarmupCronService {
 
       const template = templates[Math.floor(Math.random() * templates.length)];
 
+      // Randomize subject and body to avoid pattern detection
+      const randomizedSubject = randomizeSubject(template.subject);
+      const randomizedBody = randomizeBody(template.body);
+
       console.log(`📧 Sending from ${sender.email} to ${recipient.email}`);
-      console.log(`📝 Template: "${template.subject}"`);
+      console.log(`📝 Template: "${randomizedSubject}"`);
 
       // Create SMTP transporter
       const transporter = nodemailer.createTransport({
@@ -213,13 +287,13 @@ class WarmupCronService {
         },
       });
 
-      // Send email
+      // Send email with randomized content
       await transporter.sendMail({
         from: sender.senderName ? `"${sender.senderName}" <${sender.email}>` : sender.email,
         to: recipient.email,
-        subject: template.subject,
-        text: template.body,
-        html: template.body.replace(/\n/g, '<br>'),
+        subject: randomizedSubject,
+        text: randomizedBody,
+        html: randomizedBody.replace(/\n/g, '<br>'),
       });
 
       // Log the send
@@ -229,7 +303,7 @@ class WarmupCronService {
           recipientId: recipient.id,
           sender: sender.email,
           recipient: recipient.email,
-          subject: template.subject,
+          subject: randomizedSubject,
           status: 'sent',
           notes: 'Automatic warmup email',
         },
@@ -336,10 +410,20 @@ class WarmupCronService {
           continue;
         }
 
-        console.log(`💬 Replying to message from ${fromEmail}`);
+        // Add random delay before replying (5-240 minutes for natural behavior)
+        const replyDelay = getRandomReplyDelay();
+        const delayMinutes = Math.round(replyDelay / 1000 / 60);
+        console.log(`💬 Will reply to ${fromEmail} in ${delayMinutes} minutes`);
+        
+        // Store reply task for later (in production, use a job queue)
+        // For now, we'll reply immediately but log the intended delay
+        console.log(`📝 Composing reply to message from ${fromEmail}`);
 
         // Pick random reply template
         const replyTemplate = replyTemplates[Math.floor(Math.random() * replyTemplates.length)];
+
+        // Randomize reply content slightly
+        const randomizedReply = randomizeBody(replyTemplate.text);
 
         // Send reply
         const transporter = nodemailer.createTransport({
@@ -356,8 +440,8 @@ class WarmupCronService {
           from: account.senderName ? `"${account.senderName}" <${account.email}>` : account.email,
           to: fromEmail,
           subject: `Re: ${subject}`,
-          text: replyTemplate.text,
-          html: replyTemplate.text.replace(/\n/g, '<br>'),
+          text: randomizedReply,
+          html: randomizedReply.replace(/\n/g, '<br>'),
           inReplyTo: header.body['message-id']?.[0],
           references: header.body['message-id']?.[0],
         });
@@ -378,7 +462,20 @@ class WarmupCronService {
             recipient: fromEmail,
             subject: `Re: ${subject}`,
             status: 'replied',
-            notes: 'Automatic warmup reply',
+            notes: `Automatic warmup reply (intended delay: ${delayMinutes}m)`,
+          },
+        });
+
+        // Update warmup log with reply count
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        await prisma.warmupLog.updateMany({
+          where: {
+            mailboxId: account.id,
+            date: today,
+          },
+          data: {
+            repliedCount: { increment: 1 },
           },
         });
 
