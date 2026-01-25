@@ -22,8 +22,8 @@ COPY prisma ./prisma/
 # Install dependencies (skip postinstall script that tries to run prisma generate)
 RUN npm install --legacy-peer-deps --ignore-scripts
 
-# Generate Prisma Client explicitly using installed version (not npx which installs v7)
-RUN ./node_modules/.bin/prisma generate
+# Generate Prisma Client using npm exec (finds installed package without .bin symlinks)
+RUN npm exec prisma@5.8.1 generate
 
 # ================================
 # Builder Stage
