@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { warmupServiceV2 } from '../../../lib/warmup-service-v2';
+import { warmupCron } from '../../../lib/warmup-cron';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -7,7 +7,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const status = warmupServiceV2.getStatus();
+    const status = warmupCron.getStatus();
     
     return res.status(200).json({
       success: true,

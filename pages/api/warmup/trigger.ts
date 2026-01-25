@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireAdmin, ApiAuthUser } from '../../../lib/api-auth';
-import { warmupServiceV2 } from '../../../lib/warmup-service-v2';
+import { warmupCron } from '../../../lib/warmup-cron';
 
 async function handler(req: NextApiRequest, res: NextApiResponse, _user: ApiAuthUser): Promise<void> {
   const { method } = req;
@@ -8,31 +8,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse, _user: ApiAuth
   try {
     switch (method) {
       case 'POST':
-        // Start warmup
-        const { minDelayMinutes, maxDelayMinutes, autoReply } = req.body;
-        
-        // Start in background (don't await)
-        warmupServiceV2.startWarmup({
-          minDelayMinutes: minDelayMinutes || 5,
-          maxDelayMinutes: maxDelayMinutes || 5,
-          autoReply: autoReply !== false,
-        }).catch(err => console.error('Warmup error:', err));
+        // Start warmup cron service
+        await warmupCron.start();
 
         res.status(200).json({
           success: true,
-          message: 'Warmup service started',
-          status: warmupServiceV2.getStatus(),
+          message: 'Warmup cron service started',
+          status: warmupCron.getStatus(),
         });
         return;
 
       case 'DELETE':
-        // Stop warmup
-        await warmupServiceV2.stopWarmup();
+        // Stop warmup cron service
+        warmupCron.stop();
 
         res.status(200).json({
           success: true,
-          message: 'Warmup service stopped',
-          status: warmupServiceV2.getStatus(),
+          message: 'Warmup cron service stopped',
+          status: warmupCron.getStatus(),
         });
         return;
 
