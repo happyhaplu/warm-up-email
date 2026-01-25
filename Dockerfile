@@ -18,12 +18,15 @@ WORKDIR /app
 COPY package.json ./
 COPY prisma ./prisma/
 
-# Install dependencies with --ignore-scripts to skip postinstall
-# This avoids the "prisma: not found" error since prisma CLI isn't in PATH during npm install
-# We'll run prisma generate explicitly after install completes
+# Force NODE_ENV=development to install devDependencies (prisma CLI is a devDependency)
+# Coolify injects NODE_ENV=production which would skip devDeps and break prisma generate
+ENV NODE_ENV=development
+
+# Install ALL dependencies including devDependencies (prisma is a devDep)
+# Use --ignore-scripts to skip postinstall (prisma generate runs before binary is in PATH)
 RUN npm install --legacy-peer-deps --ignore-scripts
 
-# Now run prisma generate using the locally installed version (not npx which downloads latest)
+# Now run prisma generate using the locally installed version
 # Using ./node_modules/.bin/prisma ensures we use the pinned version (5.8.1) not latest (7.x)
 RUN ./node_modules/.bin/prisma generate
 
