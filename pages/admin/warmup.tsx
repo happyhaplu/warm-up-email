@@ -16,7 +16,6 @@ export default function WarmupControl() {
   const redirectedRef = useRef(false);
   const [isRunning, setIsRunning] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [minDelayMinutes, setMinDelayMinutes] = useState(5);
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [stats, setStats] = useState<WarmupStats>({ mailboxes: 0, sendTemplates: 0, replyTemplates: 0, logsToday: 0 });
 
@@ -72,7 +71,7 @@ export default function WarmupControl() {
   };
 
   const handleStart = async () => {
-    if (!confirm(`Start warmup with ${minDelayMinutes} minute intervals?`)) {
+    if (!confirm('Start warmup with automatic random delays (3-15 minutes between sends)?')) {
       return;
     }
 
@@ -82,7 +81,6 @@ export default function WarmupControl() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          minDelayMinutes,
           autoReply: true,
         }),
       });
@@ -232,20 +230,20 @@ export default function WarmupControl() {
             </div>
 
             {!isRunning && (
-              <div className="mb-6 p-4 bg-blue-50 rounded">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Delay Between Sends (minutes)
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="60"
-                  value={minDelayMinutes}
-                  onChange={(e) => setMinDelayMinutes(parseInt(e.target.value))}
-                  className="w-32 p-2 border rounded"
-                />
-                <p className="text-sm text-gray-600 mt-2">
-                  Recommended: 5-10 minutes for optimal warmup
+              <div className="mb-6 p-4 bg-blue-50 rounded border border-blue-200">
+                <h3 className="text-sm font-semibold text-gray-800 mb-2">🎲 Automatic Random Delays</h3>
+                <div className="space-y-2 text-sm text-gray-700">
+                  <p className="flex items-center gap-2">
+                    <span className="font-medium">📧 Between Sends:</span>
+                    <span className="bg-blue-100 px-2 py-1 rounded">3-15 minutes (random)</span>
+                  </p>
+                  <p className="flex items-center gap-2">
+                    <span className="font-medium">💬 Reply Delays:</span>
+                    <span className="bg-blue-100 px-2 py-1 rounded">5-240 minutes (random)</span>
+                  </p>
+                </div>
+                <p className="text-xs text-gray-600 mt-3">
+                  ℹ️ Random delays mimic natural human behavior and prevent pattern detection
                 </p>
               </div>
             )}
@@ -301,11 +299,11 @@ export default function WarmupControl() {
               </li>
               <li className="flex gap-3">
                 <span className="font-bold text-blue-600">2.</span>
-                <span>Pick random SendTemplate (subject + body)</span>
+                <span>Pick random SendTemplate (subject + body with randomized variations)</span>
               </li>
               <li className="flex gap-3">
                 <span className="font-bold text-blue-600">3.</span>
-                <span>Send email via SMTP</span>
+                <span>Send email via SMTP with random content variations</span>
               </li>
               <li className="flex gap-3">
                 <span className="font-bold text-blue-600">4.</span>
@@ -313,25 +311,38 @@ export default function WarmupControl() {
               </li>
               <li className="flex gap-3">
                 <span className="font-bold text-blue-600">5.</span>
-                <span>Recipient checks inbox via IMAP</span>
+                <span>Recipient checks inbox via IMAP for new emails</span>
               </li>
               <li className="flex gap-3">
                 <span className="font-bold text-blue-600">6.</span>
-                <span>Pick random ReplyTemplate and auto-reply</span>
+                <span>Auto-reply with random ReplyTemplate after <strong>5-240 minutes delay</strong></span>
               </li>
               <li className="flex gap-3">
                 <span className="font-bold text-blue-600">7.</span>
-                <span>Log all activity to database</span>
+                <span>Log all activity to database with timestamps</span>
               </li>
               <li className="flex gap-3">
                 <span className="font-bold text-blue-600">8.</span>
-                <span>Wait {minDelayMinutes} minutes before next cycle</span>
+                <span>Wait <strong>3-15 minutes (random)</strong> before next cycle</span>
               </li>
               <li className="flex gap-3">
                 <span className="font-bold text-blue-600">9.</span>
-                <span>Repeat while service is running</span>
+                <span>Repeat while service is running - each cycle with random timing</span>
               </li>
             </ol>
+
+            <div className="mt-6 p-4 bg-green-50 rounded border border-green-200">
+              <p className="text-sm font-semibold text-green-800 mb-2">
+                ✨ Randomization Features
+              </p>
+              <ul className="list-disc list-inside text-sm text-green-700 space-y-1">
+                <li><strong>Send delays:</strong> 3-15 minutes random gaps between emails</li>
+                <li><strong>Reply delays:</strong> 5-240 minutes random gaps before replying</li>
+                <li><strong>Content variation:</strong> Random greetings, closings, emojis</li>
+                <li><strong>Subject variation:</strong> Random "Re:", punctuation changes</li>
+                <li><strong>Send order:</strong> Shuffled mailbox selection each cycle</li>
+              </ul>
+            </div>
 
             <div className="mt-6 p-4 bg-yellow-50 rounded">
               <p className="text-sm text-yellow-800">
