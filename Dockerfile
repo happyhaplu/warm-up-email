@@ -23,8 +23,9 @@ COPY prisma ./prisma/
 # We'll run prisma generate explicitly after install completes
 RUN npm install --legacy-peer-deps --ignore-scripts
 
-# Now run prisma generate explicitly using npx (which finds the CLI in node_modules)
-RUN npx prisma generate
+# Now run prisma generate using the locally installed version (not npx which downloads latest)
+# Using ./node_modules/.bin/prisma ensures we use the pinned version (5.8.1) not latest (7.x)
+RUN ./node_modules/.bin/prisma generate
 
 # ================================
 # Builder Stage - Build the Next.js application
