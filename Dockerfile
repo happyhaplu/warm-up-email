@@ -14,18 +14,16 @@ RUN apk add --no-cache libc6-compat
 
 WORKDIR /app
 
-# Install pnpm
-RUN npm install -g pnpm
-
 # Copy package files
 COPY package.json ./
 COPY prisma ./prisma/
 
+# Use npm instead of pnpm for Docker builds (more stable with Node 20 Alpine)
 # Install dependencies (including devDependencies for Prisma)
-RUN pnpm install --prod=false
+RUN npm install --legacy-peer-deps
 
 # Generate Prisma Client
-RUN pnpm prisma generate
+RUN npx prisma generate
 
 # ================================
 # Builder Stage

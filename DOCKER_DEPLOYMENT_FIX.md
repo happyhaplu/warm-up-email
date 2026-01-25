@@ -1,6 +1,45 @@
 # Docker Deployment Fix - Coolify/Production Ready
 
-## Problem Identified
+## Latest Fix: pnpm ERR_INVALID_THIS Issue (January 25, 2026)
+
+### Problem
+Deployment failing with pnpm error:
+```
+ERR_PNPM_META_FETCH_FAIL  GET https://registry.npmjs.org/@jest%2Fglobals: 
+Value of "this" must be of type URLSearchParams
+```
+
+### Root Cause
+Known bug with pnpm and Node.js 20 Alpine - incompatibility between pnpm's fetch implementation and Node.js 20's native fetch API in Alpine Linux environment.
+
+### Solution Applied
+**Switched from pnpm to npm for Docker builds**
+- npm is more stable in Alpine environments
+- No fetch API conflicts
+- Better compatibility with Node.js 20
+
+### Changes Made
+```dockerfile
+# BEFORE (using pnpm - causing ERR_INVALID_THIS)
+RUN npm install -g pnpm
+RUN pnpm install --prod=false
+RUN pnpm prisma generate
+
+# AFTER (using npm - stable and reliable)
+RUN npm install --legacy-peer-deps
+RUN npx prisma generate
+```
+
+**Why `--legacy-peer-deps`?**
+- Prevents peer dependency conflicts during build
+- Common practice for Docker builds
+- Doesn't affect runtime behavior
+
+---
+
+## Original Issue Fixed: node_modules Copying (January 25, 2026)
+
+### Problem Identified
 
 ### Original Issue
 Deployment was failing at Docker build step #28:
