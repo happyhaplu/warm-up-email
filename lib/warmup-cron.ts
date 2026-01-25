@@ -218,48 +218,66 @@ class WarmupCronService {
 
     const quotaInfo: DailyQuotaInfo[] = [];
 
+    // Group accounts by userId to check plan limits per user
+    const accountsByUser = new Map<string, typeof accounts>();
     for (const account of accounts) {
-      // Check plan limits if user has a plan
-      if (account.user?.plan) {
-        const mailboxCount = await prisma.account.count({
-          where: { userId: account.userId },
-        });
+      if (!account.userId) continue;
+      if (!accountsByUser.has(account.userId)) {
+        accountsByUser.set(account.userId, []);
+      }
+      accountsByUser.get(account.userId)!.push(account);
+    }
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
+    // Check plan limits for each user (total across all their mailboxes)
+    const usersExceededLimits = new Set<string>();
+    
+    for (const [userId, userAccounts] of accountsByUser) {
+      const user = userAccounts[0].user;
+      if (!user?.plan) continue;
 
-        const dailyEmailsSent = await prisma.log.count({
-          where: {
-            senderId: account.id,
-            timestamp: { gte: today, lt: tomorrow },
-            status: 'sent',
-          },
-        });
+      // Get ALL mailbox IDs for this user
+      const userMailboxIds = userAccounts.map(acc => acc.id);
 
-        const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-        const monthlyEmailsSent = await prisma.log.count({
-          where: {
-            senderId: account.id,
-            timestamp: { gte: firstDayOfMonth },
-            status: 'sent',
-          },
-        });
+      // Count TOTAL emails sent today across ALL user's mailboxes
+      const totalDailyEmailsSent = await prisma.log.count({
+        where: {
+          senderId: { in: userMailboxIds },
+          timestamp: { gte: today, lt: tomorrow },
+          status: { in: ['SENT', 'REPLIED'] },
+        },
+      });
 
-        const limitCheck = checkPlanLimits(
-          { mailboxCount, dailyEmailsSent, monthlyEmailsSent },
-          {
-            mailboxLimit: account.user.plan.mailboxLimit || 999,
-            dailyEmailLimit: account.user.plan.dailyEmailLimit || 9999,
-            monthlyEmailLimit: account.user.plan.monthlyEmailLimit || 99999,
-          }
-        );
+      // Count TOTAL emails sent this month across ALL user's mailboxes
+      const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+      const totalMonthlyEmailsSent = await prisma.log.count({
+        where: {
+          senderId: { in: userMailboxIds },
+          timestamp: { gte: firstDayOfMonth },
+          status: { in: ['SENT', 'REPLIED'] },
+        },
+      });
 
-        if (limitCheck.exceeded) {
-          console.log(`⚠️ ${account.email}: ${limitCheck.message}`);
-          continue; // Skip this mailbox
+      // Check if user has exceeded their PLAN limits (not individual mailbox limits)
+      const dailyLimitExceeded = totalDailyEmailsSent >= user.plan.dailyEmailLimit;
+      const monthlyLimitExceeded = totalMonthlyEmailsSent >= user.plan.monthlyEmailLimit;
+
+      if (dailyLimitExceeded || monthlyLimitExceeded) {
+        usersExceededLimits.add(userId);
+        
+        if (dailyLimitExceeded) {
+          console.log(`⛔ User ${user.email} reached daily plan limit: ${totalDailyEmailsSent}/${user.plan.dailyEmailLimit} emails sent today`);
         }
+        if (monthlyLimitExceeded) {
+          console.log(`⛔ User ${user.email} reached monthly plan limit: ${totalMonthlyEmailsSent}/${user.plan.monthlyEmailLimit} emails sent this month`);
+        }
+      }
+    }
+
+    for (const account of accounts) {
+      // Skip mailboxes for users who exceeded plan limits
+      if (account.userId && usersExceededLimits.has(account.userId)) {
+        console.log(`⏭️  Skipping ${account.email} - user plan limit reached`);
+        continue;
       }
 
       // Initialize warmup start date if not set
@@ -340,14 +358,72 @@ class WarmupCronService {
    */
   private async sendWarmupEmail(senderId: number): Promise<boolean> {
     try {
-      // Get sender account
+      // Get sender account with user and plan info
       const sender = await prisma.account.findUnique({
         where: { id: senderId },
+        include: {
+          user: {
+            include: {
+              plan: true,
+            },
+          },
+        },
       });
 
       if (!sender) {
         console.error(`❌ Sender mailbox ${senderId} not found`);
         return false;
+      }
+
+      // ENFORCE PLAN LIMITS: Check user's total daily/monthly limits across ALL mailboxes
+      if (sender.user?.plan && sender.userId) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+
+        // Get all mailbox IDs for this user
+        const userMailboxes = await prisma.account.findMany({
+          where: { userId: sender.userId },
+          select: { id: true },
+        });
+        const userMailboxIds = userMailboxes.map(m => m.id);
+
+        // Count TOTAL emails sent today across ALL user's mailboxes
+        const totalDailyEmailsSent = await prisma.log.count({
+          where: {
+            senderId: { in: userMailboxIds },
+            timestamp: { gte: today, lt: tomorrow },
+            status: { in: ['SENT', 'REPLIED'] },
+          },
+        });
+
+        // Check daily plan limit
+        if (totalDailyEmailsSent >= sender.user.plan.dailyEmailLimit) {
+          console.log(`⛔ DAILY PLAN LIMIT REACHED: User ${sender.user.email} has sent ${totalDailyEmailsSent}/${sender.user.plan.dailyEmailLimit} emails today`);
+          return false; // STOP SENDING
+        }
+
+        // Count TOTAL emails sent this month across ALL user's mailboxes
+        const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        const totalMonthlyEmailsSent = await prisma.log.count({
+          where: {
+            senderId: { in: userMailboxIds },
+            timestamp: { gte: firstDayOfMonth },
+            status: { in: ['SENT', 'REPLIED'] },
+          },
+        });
+
+        // Check monthly plan limit
+        if (totalMonthlyEmailsSent >= sender.user.plan.monthlyEmailLimit) {
+          console.log(`⛔ MONTHLY PLAN LIMIT REACHED: User ${sender.user.email} has sent ${totalMonthlyEmailsSent}/${sender.user.plan.monthlyEmailLimit} emails this month`);
+          return false; // STOP SENDING
+        }
+
+        // Log remaining quota
+        const dailyRemaining = sender.user.plan.dailyEmailLimit - totalDailyEmailsSent;
+        const monthlyRemaining = sender.user.plan.monthlyEmailLimit - totalMonthlyEmailsSent;
+        console.log(`📊 Plan quota for ${sender.user.email}: Daily ${dailyRemaining} left, Monthly ${monthlyRemaining} left`);
       }
 
       // Check if we should use dedicated recipient pool
