@@ -1,75 +1,88 @@
 # syntax=docker/dockerfile:1
 
 # ================================
-# Base Stage
+# Base Stage - Common base for all stages
 # ================================
 FROM node:20-alpine AS base
+
+# Install required system dependencies
 RUN apk add --no-cache libc6-compat openssl
 
 # ================================
-# Dependencies Stage
+# Dependencies Stage - Install npm packages
 # ================================
 FROM base AS deps
-RUN apk add --no-cache libc6-compat
-
 WORKDIR /app
 
-# Copy package files
+# Copy package files and prisma schema
 COPY package.json ./
 COPY prisma ./prisma/
 
-# Use npm instead of pnpm for Docker builds (more stable with Node 20 Alpine)
-# Install dependencies (postinstall will run prisma generate automatically)
-RUN npm install --legacy-peer-deps
+# Install dependencies with --ignore-scripts to skip postinstall
+# This avoids the "prisma: not found" error since prisma CLI isn't in PATH during npm install
+# We'll run prisma generate explicitly after install completes
+RUN npm install --legacy-peer-deps --ignore-scripts
+
+# Now run prisma generate explicitly using npx (which finds the CLI in node_modules)
+RUN npx prisma generate
 
 # ================================
-# Builder Stage
+# Builder Stage - Build the Next.js application
 # ================================
 FROM base AS builder
 WORKDIR /app
 
-# Copy node_modules from deps
+# Set build-time environment
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Copy node_modules from deps stage (includes generated Prisma client)
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build the application
+# Build the Next.js application
+# Note: prisma generate is already done in deps stage, so build script's prisma generate will be a no-op
 RUN npm run build
 
 # ================================
-# Runner Stage
+# Runner Stage - Production runtime
 # ================================
 FROM base AS runner
 WORKDIR /app
 
-ENV NODE_ENV production
+# Set production environment variables using proper key=value format
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
 
-# Create system user
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+# Create non-root user for security
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
 
-# Copy necessary files
+# Copy built application files
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/services ./services
 
-# Copy only Prisma client (not entire node_modules)
+# Copy Prisma client from builder
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
-# Change ownership
+# Set proper ownership
 RUN chown -R nextjs:nodejs /app
 
+# Switch to non-root user
 USER nextjs
 
+# Expose application port
 EXPOSE 3000
 
-ENV PORT 3000
-ENV HOSTNAME "0.0.0.0"
-
-# Health check
+# Health check for container orchestration
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000/api/warmup/status', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
+    CMD node -e "require('http').get('http://localhost:3000/api/warmup/status', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
 
+# Start the application
 CMD ["node", "server.js"]
