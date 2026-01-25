@@ -19,10 +19,10 @@ COPY package.json ./
 COPY prisma ./prisma/
 
 # Use npm instead of pnpm for Docker builds (more stable with Node 20 Alpine)
-# Install dependencies (including devDependencies for Prisma)
-RUN npm install --legacy-peer-deps
+# Install dependencies (skip postinstall script that tries to run prisma generate)
+RUN npm install --legacy-peer-deps --ignore-scripts
 
-# Generate Prisma Client
+# Generate Prisma Client explicitly
 RUN npx prisma generate
 
 # ================================
