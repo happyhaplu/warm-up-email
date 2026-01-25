@@ -88,8 +88,13 @@ class WarmupService {
     console.log(`📧 Sending from ${sender.email} to ${recipient.email}`);
 
     try {
-      // 2. Send email via SMTP
-      const transporter = nodemailer.createTransport({
+      // Detect provider for optional enhancements
+      const isOutlook = sender.smtpHost.toLowerCase().includes('outlook') || 
+                        sender.smtpHost.toLowerCase().includes('office365');
+      const isYahoo = sender.smtpHost.toLowerCase().includes('yahoo');
+
+      // Universal robust SMTP configuration for ALL providers
+      const transportOptions: any = {
         host: sender.smtpHost,
         port: sender.smtpPort,
         secure: sender.smtpPort === 465,
@@ -97,7 +102,23 @@ class WarmupService {
           user: sender.email,
           pass: sender.appPassword,
         },
-      });
+        connectionTimeout: 15000,
+        greetingTimeout: 10000,
+        socketTimeout: 15000,
+        requireTLS: sender.smtpPort === 587,
+        tls: {
+          ciphers: 'SSLv3',
+          rejectUnauthorized: false,
+          minVersion: 'TLSv1.2'
+        },
+      };
+
+      // Provider-specific enhancements
+      if (isOutlook || isYahoo) {
+        transportOptions.auth.type = 'login';
+      }
+
+      const transporter = nodemailer.createTransport(transportOptions);
 
       const mailOptions = {
         from: sender.senderName ? `${sender.senderName} <${sender.email}>` : sender.email,
@@ -174,8 +195,13 @@ class WarmupService {
         const replySubject = `Re: ${originalSubject}`;
         const replyBody = this.getRandomReply();
 
-        // Send auto-reply
-        const transporter = nodemailer.createTransport({
+        // Detect provider for optional enhancements
+        const isOutlook = sender.smtpHost.toLowerCase().includes('outlook') || 
+                          sender.smtpHost.toLowerCase().includes('office365');
+        const isYahoo = sender.smtpHost.toLowerCase().includes('yahoo');
+
+        // Universal robust SMTP configuration for ALL providers
+        const transportOptions: any = {
           host: sender.smtpHost,
           port: sender.smtpPort,
           secure: sender.smtpPort === 465,
@@ -183,7 +209,23 @@ class WarmupService {
             user: sender.email,
             pass: sender.appPassword,
           },
-        });
+          connectionTimeout: 15000,
+          greetingTimeout: 10000,
+          socketTimeout: 15000,
+          requireTLS: sender.smtpPort === 587,
+          tls: {
+            ciphers: 'SSLv3',
+            rejectUnauthorized: false,
+            minVersion: 'TLSv1.2'
+          },
+        };
+
+        // Provider-specific enhancements
+        if (isOutlook || isYahoo) {
+          transportOptions.auth.type = 'login';
+        }
+
+        const transporter = nodemailer.createTransport(transportOptions);
 
         await transporter.sendMail({
           from: sender.senderName ? `${sender.senderName} <${sender.email}>` : sender.email,

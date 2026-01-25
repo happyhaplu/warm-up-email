@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { requireAuth } from '../../../lib/api-auth';
 import prisma from '../../../lib/prisma';
+import { validateWarmupSettings } from '../../../lib/warmup-config';
 
 async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
   if (req.method !== 'POST') {
@@ -25,21 +26,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
       }
     }
 
-    // Validate values
-    if (warmupStartCount < 1 || warmupStartCount > 10) {
-      return res.status(400).json({ error: 'Start count must be between 1 and 10' });
-    }
+    // Validate values using centralized config
+    const validation = validateWarmupSettings({
+      warmupStartCount,
+      warmupIncreaseBy,
+      warmupMaxDaily,
+      warmupReplyRate,
+    });
 
-    if (warmupIncreaseBy < 1 || warmupIncreaseBy > 5) {
-      return res.status(400).json({ error: 'Increase by must be between 1 and 5' });
-    }
-
-    if (warmupMaxDaily < 5 || warmupMaxDaily > 20) {
-      return res.status(400).json({ error: 'Max daily must be between 5 and 20' });
-    }
-
-    if (warmupReplyRate < 25 || warmupReplyRate > 45) {
-      return res.status(400).json({ error: 'Reply rate must be between 25 and 45' });
+    if (!validation.valid) {
+      return res.status(400).json({ 
+        error: 'Invalid warmup settings', 
+        details: validation.errors 
+      });
     }
 
     // Update settings

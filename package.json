@@ -60,17 +60,19 @@
     "imap-simple": "^5.1.0",
     "next": "^14.0.4",
     "node-cron": "^3.0.3",
-    "nodemailer": "^6.10.1",
+    "nodemailer": "^6.9.15",
     "papaparse": "^5.5.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@jest/globals": "^30.2.0",
     "@types/imap-simple": "^4.2.10",
-    "@types/node": "^20.19.30",
+    "@types/jest": "^30.0.0",
+    "@types/node": "20.19.30",
     "@types/papaparse": "^5.5.2",
-    "@types/react": "^18.3.27",
+    "@types/react": "18.3.27",
     "@types/react-dom": "^18.3.7",
     "autoprefixer": "^10.4.16",
     "nodemon": "^3.0.2",
@@ -78,7 +80,7 @@
     "prisma": "^5.8.1",
     "tailwindcss": "^3.4.0",
     "tsx": "^4.21.0",
-    "typescript": "^5.3.3"
+    "typescript": "5.9.3"
   },
   "private": true
 }

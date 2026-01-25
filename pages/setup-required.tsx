@@ -7,6 +7,14 @@ export default function SetupRequired() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4">
       <div className="max-w-2xl w-full space-y-8">
         <div className="text-center">
+          <div className="flex items-center justify-center mb-6">
+            <img 
+              src="https://raw.githubusercontent.com/happyhaplu/Outcraftly-assets/main/1764808676915.jpg" 
+              alt="Outcraftly Logo" 
+              className="h-12 w-auto"
+            />
+            <span className="ml-3 text-3xl font-bold text-gray-900">Warmup</span>
+          </div>
           <div className="text-6xl mb-4">⚠️</div>
           <h2 className="text-3xl font-extrabold text-gray-900">
             Supabase Setup Required

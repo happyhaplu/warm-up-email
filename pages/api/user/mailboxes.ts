@@ -2,6 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { requireAuth } from '../../../lib/api-auth';
 import prisma from '../../../lib/prisma';
 import { testMailboxConnection } from '../../../lib/connection-validator';
+import { checkPlanLimits } from '../../../lib/warmup-utils';
 
 async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
   if (req.method === 'GET') {
@@ -98,6 +99,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
       // Verify user exists in database first
       const userExists = await prisma.user.findUnique({
         where: { id: user.id },
+        include: { plan: true },
       });
 
       if (!userExists) {
@@ -105,6 +107,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
         return res.status(400).json({ 
           error: 'User account not properly initialized. Please log out and log in again.' 
         });
+      }
+
+      // Check plan limits before adding new mailbox
+      if (userExists.plan) {
+        const mailboxCount = await prisma.account.count({
+          where: { userId: user.id },
+        });
+
+        const limitCheck = checkPlanLimits(
+          { mailboxCount, dailyEmailsSent: 0, monthlyEmailsSent: 0 },
+          {
+            mailboxLimit: userExists.plan.mailboxLimit || 999,
+            dailyEmailLimit: userExists.plan.dailyEmailLimit || 9999,
+            monthlyEmailLimit: userExists.plan.monthlyEmailLimit || 99999,
+          }
+        );
+
+        if (limitCheck.mailboxLimitExceeded) {
+          return res.status(403).json({ 
+            error: limitCheck.message || 'Mailbox limit reached for your plan',
+            limit: userExists.plan.mailboxLimit,
+            current: mailboxCount,
+          });
+        }
       }
 
       // Check if email already exists
@@ -211,7 +237,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
     }
   } else if (req.method === 'PUT') {
     try {
-      const { id, dailyWarmupQuota } = req.body;
+      const { 
+        id, 
+        warmupEnabled,
+        warmupStartCount,
+        warmupIncreaseBy,
+        warmupMaxDaily,
+        warmupReplyRate,
+        dailyWarmupQuota 
+      } = req.body;
 
       if (!id) {
         return res.status(400).json({ error: 'Mailbox ID is required' });
@@ -230,26 +264,162 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
         return res.status(403).json({ error: 'Not authorized to update this mailbox' });
       }
 
-      // Validate quota if provided
+      // Build update data with validation
+      const updateData: any = {};
+
+      if (warmupEnabled !== undefined) {
+        updateData.warmupEnabled = Boolean(warmupEnabled);
+        // Set start date when enabling warmup
+        if (warmupEnabled && !account.warmupStartDate) {
+          updateData.warmupStartDate = new Date();
+        }
+      }
+
+      if (warmupStartCount !== undefined) {
+        const start = parseInt(warmupStartCount);
+        if (start < 1 || start > 100) {
+          return res.status(400).json({ error: 'Start count must be between 1 and 100' });
+        }
+        updateData.warmupStartCount = start;
+      }
+
+      if (warmupIncreaseBy !== undefined) {
+        const increase = parseInt(warmupIncreaseBy);
+        if (increase < 0 || increase > 50) {
+          return res.status(400).json({ error: 'Increase must be between 0 and 50' });
+        }
+        updateData.warmupIncreaseBy = increase;
+      }
+
+      if (warmupMaxDaily !== undefined) {
+        const max = parseInt(warmupMaxDaily);
+        // 0 or -1 means unlimited
+        if (max !== 0 && max !== -1 && (max < 1 || max > 1000)) {
+          return res.status(400).json({ error: 'Max daily must be between 1-1000, or 0/-1 for unlimited' });
+        }
+        updateData.warmupMaxDaily = max;
+      }
+
+      if (warmupReplyRate !== undefined) {
+        const rate = parseInt(warmupReplyRate);
+        if (rate < 0 || rate > 100) {
+          return res.status(400).json({ error: 'Reply rate must be between 0 and 100' });
+        }
+        updateData.warmupReplyRate = rate;
+      }
+
       if (dailyWarmupQuota !== undefined) {
         const quota = parseInt(dailyWarmupQuota);
-        if (quota < 2 || quota > 5) {
-          return res.status(400).json({ error: 'Daily warmup quota must be between 2 and 5' });
+        if (quota < 1 || quota > 1000) {
+          return res.status(400).json({ error: 'Daily quota must be between 1 and 1000' });
         }
+        updateData.dailyWarmupQuota = quota;
       }
 
       // Update mailbox
       const updated = await prisma.account.update({
         where: { id: parseInt(id) },
-        data: {
-          ...(dailyWarmupQuota !== undefined && { dailyWarmupQuota: parseInt(dailyWarmupQuota) }),
-        },
+        data: updateData,
       });
 
       res.status(200).json(updated);
     } catch (error) {
       console.error('Error updating mailbox:', error);
       res.status(500).json({ error: 'Failed to update mailbox' });
+    }
+  } else if (req.method === 'PATCH') {
+    // Bulk update endpoint
+    try {
+      const { 
+        mailboxIds, 
+        warmupEnabled,
+        warmupStartCount,
+        warmupIncreaseBy,
+        warmupMaxDaily,
+        warmupReplyRate,
+        dailyWarmupQuota,
+      } = req.body;
+
+      if (!mailboxIds || !Array.isArray(mailboxIds) || mailboxIds.length === 0) {
+        return res.status(400).json({ error: 'Mailbox IDs array is required' });
+      }
+
+      // Verify ownership of all mailboxes
+      const accounts = await prisma.account.findMany({
+        where: {
+          id: { in: mailboxIds.map((id: any) => parseInt(id)) },
+          userId: user.id,
+        },
+      });
+
+      if (accounts.length !== mailboxIds.length) {
+        return res.status(403).json({ error: 'Not authorized to update some mailboxes' });
+      }
+
+      // Build update data
+      const updateData: any = {};
+
+      if (warmupEnabled !== undefined) {
+        updateData.warmupEnabled = Boolean(warmupEnabled);
+      }
+
+      if (warmupStartCount !== undefined) {
+        const start = parseInt(warmupStartCount);
+        if (start < 1 || start > 100) {
+          return res.status(400).json({ error: 'Start count must be between 1 and 100' });
+        }
+        updateData.warmupStartCount = start;
+      }
+
+      if (warmupIncreaseBy !== undefined) {
+        const increase = parseInt(warmupIncreaseBy);
+        if (increase < 0 || increase > 50) {
+          return res.status(400).json({ error: 'Increase must be between 0 and 50' });
+        }
+        updateData.warmupIncreaseBy = increase;
+      }
+
+      if (warmupMaxDaily !== undefined) {
+        const max = parseInt(warmupMaxDaily);
+        if (max !== 0 && max !== -1 && (max < 1 || max > 1000)) {
+          return res.status(400).json({ error: 'Max daily must be between 1-1000, or 0/-1 for unlimited' });
+        }
+        updateData.warmupMaxDaily = max;
+      }
+
+      if (warmupReplyRate !== undefined) {
+        const rate = parseInt(warmupReplyRate);
+        if (rate < 0 || rate > 100) {
+          return res.status(400).json({ error: 'Reply rate must be between 0 and 100' });
+        }
+        updateData.warmupReplyRate = rate;
+      }
+
+      if (dailyWarmupQuota !== undefined) {
+        const quota = parseInt(dailyWarmupQuota);
+        if (quota < 0 || quota > 1000) {
+          return res.status(400).json({ error: 'Daily quota must be between 0 and 1000' });
+        }
+        updateData.dailyWarmupQuota = quota;
+      }
+
+      // Bulk update
+      const result = await prisma.account.updateMany({
+        where: {
+          id: { in: mailboxIds.map((id: any) => parseInt(id)) },
+          userId: user.id,
+        },
+        data: updateData,
+      });
+
+      res.status(200).json({ 
+        success: true, 
+        updated: result.count,
+        settings: updateData 
+      });
+    } catch (error) {
+      console.error('Error bulk updating mailboxes:', error);
+      res.status(500).json({ error: 'Failed to bulk update mailboxes' });
     }
   } else {
     res.status(405).json({ error: 'Method not allowed' });

@@ -39,6 +39,21 @@ interface Stats {
   failures: number;
 }
 
+interface UserProfile {
+  plan: {
+    displayName: string;
+    mailboxLimit: number;
+    dailyEmailLimit: number;
+    monthlyEmailLimit: number;
+  } | null;
+}
+
+interface UsageStats {
+  mailboxCount: number;
+  dailyEmailsSent: number;
+  monthlyEmailsSent: number;
+}
+
 interface ValidationError {
   field: string;
   message: string;
@@ -49,6 +64,8 @@ export default function UserDashboard() {
   const { user, logout, initialized } = useAuth();
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [usage, setUsage] = useState<UsageStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAddMailbox, setShowAddMailbox] = useState(false);
   const [showBulkImport, setShowBulkImport] = useState(false);
@@ -78,9 +95,16 @@ export default function UserDashboard() {
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [deletingBulk, setDeletingBulk] = useState(false);
-  const [showBulkQuotaEdit, setShowBulkQuotaEdit] = useState(false);
-  const [bulkQuotaValue, setBulkQuotaValue] = useState(2);
-  const [updatingQuota, setUpdatingQuota] = useState(false);
+  const [showBulkWarmupModal, setShowBulkWarmupModal] = useState(false);
+  const [bulkEditSettings, setBulkEditSettings] = useState({
+    warmupEnabled: true,
+    warmupStartCount: 3,
+    warmupIncreaseBy: 3,
+    warmupMaxDaily: 20,
+    warmupReplyRate: 35,
+    dailyWarmupQuota: 20,
+  });
+  const [updatingBulkSettings, setUpdatingBulkSettings] = useState(false);
   const [togglingWarmup, setTogglingWarmup] = useState<Set<number>>(new Set());
   const [showWarmupSettings, setShowWarmupSettings] = useState<number | null>(null);
   const [showReport, setShowReport] = useState<number | null>(null);
@@ -126,9 +150,11 @@ export default function UserDashboard() {
     try {
       setLoading(true);
 
-      const [mailboxesRes, statsRes] = await Promise.all([
+      const [mailboxesRes, statsRes, profileRes, usageRes] = await Promise.all([
         authFetch('/api/user/mailboxes'),
         authFetch('/api/user/stats'),
+        authFetch('/api/user/profile'),
+        authFetch('/api/user/usage'),
       ]);
 
       if (mailboxesRes.ok) {
@@ -139,6 +165,16 @@ export default function UserDashboard() {
       if (statsRes.ok) {
         const data = await statsRes.json();
         setStats(data);
+      }
+
+      if (profileRes.ok) {
+        const data = await profileRes.json();
+        setProfile(data);
+      }
+
+      if (usageRes.ok) {
+        const data = await usageRes.json();
+        setUsage(data);
       }
     } catch (error) {
       console.error('Error loading data:', error);
@@ -410,28 +446,35 @@ export default function UserDashboard() {
     }
   };
 
-  const handleBulkQuotaUpdate = async () => {
+  const handleBulkWarmupUpdate = async () => {
     if (selectedMailboxes.size === 0) return;
 
-    setUpdatingQuota(true);
+    setUpdatingBulkSettings(true);
     try {
-      const updatePromises = Array.from(selectedMailboxes).map(id =>
-        authFetch('/api/user/mailboxes', {
-          method: 'PUT',
-          body: JSON.stringify({ id, dailyWarmupQuota: bulkQuotaValue }),
-        })
-      );
+      const res = await authFetch('/api/user/mailboxes', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mailboxIds: Array.from(selectedMailboxes),
+          ...bulkEditSettings,
+        }),
+      });
 
-      await Promise.all(updatePromises);
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || 'Failed to update settings');
+      }
+
+      const result = await res.json();
+      setShowBulkWarmupModal(false);
       setSelectedMailboxes(new Set());
-      setShowBulkQuotaEdit(false);
       loadData();
-      alert(`Successfully updated quota for ${selectedMailboxes.size} mailbox(es)`);
-    } catch (error) {
-      console.error('Error updating quota:', error);
-      alert('Failed to update quota for some mailboxes');
+      alert(`✅ Successfully updated warmup settings for ${result.updated} mailbox(es)`);
+    } catch (error: any) {
+      console.error('Error updating settings:', error);
+      alert(`❌ ${error.message || 'Failed to update settings'}`);
     } finally {
-      setUpdatingQuota(false);
+      setUpdatingBulkSettings(false);
     }
   };
 
@@ -576,17 +619,9 @@ export default function UserDashboard() {
       <div className="min-h-screen bg-gray-50 p-8">
         <div className="max-w-6xl mx-auto">
           {/* Header */}
-          <div className="flex justify-between items-center mb-8">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">📧 My Dashboard</h1>
-              <p className="text-gray-600 mt-1">Welcome, {user.email}</p>
-            </div>
-            <button
-              onClick={logout}
-              className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
-            >
-              Logout
-            </button>
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold text-gray-900">📧 My Dashboard</h1>
+            <p className="text-gray-600 mt-1">Welcome, {user.email}</p>
           </div>
 
           {/* Navigation */}
@@ -603,7 +638,113 @@ export default function UserDashboard() {
             >
               My Logs
             </button>
+            <button
+              onClick={() => router.push('/user/account')}
+              className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600"
+            >
+              My Account
+            </button>
           </div>
+
+          {/* Quota Summary Widget */}
+          {profile?.plan && usage && (
+            <div className="bg-gradient-to-br from-blue-600 to-purple-700 rounded-xl shadow-xl p-6 mb-8 text-white">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-2xl font-bold">📊 Plan & Quota Usage</h2>
+                  <p className="text-blue-100 text-sm mt-1">Current Plan: <span className="font-semibold">{profile.plan.displayName}</span></p>
+                </div>
+                <button
+                  onClick={loadData}
+                  className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-white font-medium transition-colors"
+                >
+                  🔄 Refresh
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Mailboxes Quick View */}
+                <div className="bg-white/10 backdrop-blur-sm rounded-lg p-4 border border-white/20">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-blue-100">📫 Mailboxes</span>
+                    <span className="text-xs font-bold px-2 py-1 rounded-full bg-white/20">
+                      {Math.round((usage.mailboxCount / profile.plan.mailboxLimit) * 100)}%
+                    </span>
+                  </div>
+                  <div className="flex items-baseline gap-2 mb-2">
+                    <span className="text-2xl font-bold">{usage.mailboxCount}</span>
+                    <span className="text-sm text-blue-100">/ {profile.plan.mailboxLimit}</span>
+                  </div>
+                  <div className="w-full bg-white/20 rounded-full h-2">
+                    <div
+                      className="bg-white h-2 rounded-full transition-all"
+                      style={{ width: `${Math.min((usage.mailboxCount / profile.plan.mailboxLimit) * 100, 100)}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-xs text-blue-100 mt-2">
+                    {profile.plan.mailboxLimit - usage.mailboxCount} slots remaining
+                  </p>
+                </div>
+
+                {/* Daily Emails Quick View */}
+                <div className="bg-white/10 backdrop-blur-sm rounded-lg p-4 border border-white/20">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-blue-100">📧 Today's Emails</span>
+                    <span className="text-xs font-bold px-2 py-1 rounded-full bg-white/20">
+                      {Math.round((usage.dailyEmailsSent / profile.plan.dailyEmailLimit) * 100)}%
+                    </span>
+                  </div>
+                  <div className="flex items-baseline gap-2 mb-2">
+                    <span className="text-2xl font-bold">{usage.dailyEmailsSent}</span>
+                    <span className="text-sm text-blue-100">/ {profile.plan.dailyEmailLimit}</span>
+                  </div>
+                  <div className="w-full bg-white/20 rounded-full h-2">
+                    <div
+                      className="bg-white h-2 rounded-full transition-all"
+                      style={{ width: `${Math.min((usage.dailyEmailsSent / profile.plan.dailyEmailLimit) * 100, 100)}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-xs text-blue-100 mt-2">
+                    {profile.plan.dailyEmailLimit - usage.dailyEmailsSent} left today
+                  </p>
+                </div>
+
+                {/* Monthly Emails Quick View */}
+                <div className="bg-white/10 backdrop-blur-sm rounded-lg p-4 border border-white/20">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-blue-100">📅 This Month</span>
+                    <span className="text-xs font-bold px-2 py-1 rounded-full bg-white/20">
+                      {Math.round((usage.monthlyEmailsSent / profile.plan.monthlyEmailLimit) * 100)}%
+                    </span>
+                  </div>
+                  <div className="flex items-baseline gap-2 mb-2">
+                    <span className="text-2xl font-bold">{usage.monthlyEmailsSent}</span>
+                    <span className="text-sm text-blue-100">/ {profile.plan.monthlyEmailLimit}</span>
+                  </div>
+                  <div className="w-full bg-white/20 rounded-full h-2">
+                    <div
+                      className="bg-white h-2 rounded-full transition-all"
+                      style={{ width: `${Math.min((usage.monthlyEmailsSent / profile.plan.monthlyEmailLimit) * 100, 100)}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-xs text-blue-100 mt-2">
+                    {profile.plan.monthlyEmailLimit - usage.monthlyEmailsSent} left this month
+                  </p>
+                </div>
+              </div>
+
+              {/* Warning Banner if approaching limits */}
+              {((usage.dailyEmailsSent / profile.plan.dailyEmailLimit) * 100 >= 90 ||
+                (usage.monthlyEmailsSent / profile.plan.monthlyEmailLimit) * 100 >= 90) && (
+                <div className="mt-4 bg-yellow-400 text-yellow-900 rounded-lg p-3 flex items-center gap-2">
+                  <span className="text-xl">⚠️</span>
+                  <span className="text-sm font-medium">
+                    You're approaching your quota limits. Consider upgrading your plan or optimizing sending patterns.
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
 
           {loading ? (
             <div className="text-center py-12">
@@ -879,16 +1020,16 @@ user2@gmail.com,yyyy yyyy yyyy yyyy,User Two,smtp.gmail.com,587,imap.gmail.com,9
                 {/* Bulk Actions Bar */}
                 {selectedMailboxes.size > 0 && (
                   <div className="px-6 py-3 bg-blue-50 border-b">
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center justify-between">
                       <span className="text-sm text-blue-800">
                         {selectedMailboxes.size} mailbox(es) selected
                       </span>
                       <div className="flex gap-2">
                         <button
-                          onClick={() => setShowBulkQuotaEdit(!showBulkQuotaEdit)}
+                          onClick={() => setShowBulkWarmupModal(true)}
                           className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm"
                         >
-                          ✏️ Edit Quota
+                          ⚙️ Edit Warmup Settings
                         </button>
                         <button
                           onClick={handleBulkDelete}
@@ -899,34 +1040,6 @@ user2@gmail.com,yyyy yyyy yyyy yyyy,User Two,smtp.gmail.com,587,imap.gmail.com,9
                         </button>
                       </div>
                     </div>
-                    {showBulkQuotaEdit && (
-                      <div className="flex items-center gap-3 p-3 bg-white rounded border border-blue-200">
-                        <label className="text-sm font-medium text-gray-700">New Quota:</label>
-                        <select
-                          value={bulkQuotaValue}
-                          onChange={(e) => setBulkQuotaValue(parseInt(e.target.value))}
-                          className="px-3 py-1 border rounded text-sm"
-                        >
-                          <option value={2}>2 emails/day</option>
-                          <option value={3}>3 emails/day</option>
-                          <option value={4}>4 emails/day</option>
-                          <option value={5}>5 emails/day</option>
-                        </select>
-                        <button
-                          onClick={handleBulkQuotaUpdate}
-                          disabled={updatingQuota}
-                          className="px-4 py-1 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50 text-sm"
-                        >
-                          {updatingQuota ? 'Updating...' : '✓ Apply'}
-                        </button>
-                        <button
-                          onClick={() => setShowBulkQuotaEdit(false)}
-                          className="px-4 py-1 bg-gray-300 text-gray-700 rounded hover:bg-gray-400 text-sm"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    )}
                   </div>
                 )}
 
@@ -1278,6 +1391,151 @@ user2@gmail.com,yyyy yyyy yyyy yyyy,User Two,smtp.gmail.com,587,imap.gmail.com,9
                 className="w-full px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Warmup Settings Modal */}
+      {showBulkWarmupModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              Bulk Edit Warmup Settings
+            </h3>
+            <p className="text-sm text-gray-600 mb-6">
+              Update warmup settings for {selectedMailboxes.size} selected mailbox(es)
+            </p>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Enable Warmup
+                </label>
+                <select
+                  value={bulkEditSettings.warmupEnabled ? 'true' : 'false'}
+                  onChange={(e) => setBulkEditSettings({
+                    ...bulkEditSettings,
+                    warmupEnabled: e.target.value === 'true'
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="true">✓ Enabled</option>
+                  <option value="false">✗ Disabled</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Start with emails/day (Recommended: 3)
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={bulkEditSettings.warmupStartCount}
+                  onChange={(e) => setBulkEditSettings({
+                    ...bulkEditSettings,
+                    warmupStartCount: parseInt(e.target.value) || 1
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="3"
+                />
+                <p className="text-xs text-gray-500 mt-1">How many emails to send on day 1</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Increase by (Recommended: 3)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="50"
+                  value={bulkEditSettings.warmupIncreaseBy}
+                  onChange={(e) => setBulkEditSettings({
+                    ...bulkEditSettings,
+                    warmupIncreaseBy: parseInt(e.target.value) || 0
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="3"
+                />
+                <p className="text-xs text-gray-500 mt-1">Daily email increase amount</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Maximum emails/day (Recommended: 20)
+                </label>
+                <input
+                  type="number"
+                  min="-1"
+                  max="1000"
+                  value={bulkEditSettings.warmupMaxDaily}
+                  onChange={(e) => setBulkEditSettings({
+                    ...bulkEditSettings,
+                    warmupMaxDaily: parseInt(e.target.value) || 0
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="20"
+                />
+                <p className="text-xs text-gray-500 mt-1">Set to 0 or -1 for unlimited</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Reply rate % (Recommended: 35%)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={bulkEditSettings.warmupReplyRate}
+                  onChange={(e) => setBulkEditSettings({
+                    ...bulkEditSettings,
+                    warmupReplyRate: parseInt(e.target.value) || 0
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="35"
+                />
+                <p className="text-xs text-gray-500 mt-1">Percentage of emails that get replies (0-100%)</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Daily Warmup Quota (Current Day Limit)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="1000"
+                  value={bulkEditSettings.dailyWarmupQuota}
+                  onChange={(e) => setBulkEditSettings({
+                    ...bulkEditSettings,
+                    dailyWarmupQuota: parseInt(e.target.value) || 0
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="20"
+                />
+                <p className="text-xs text-gray-500 mt-1">Current day email quota (updates today's limit immediately)</p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex gap-3">
+              <button
+                onClick={handleBulkWarmupUpdate}
+                disabled={updatingBulkSettings}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+              >
+                {updatingBulkSettings ? 'Saving...' : 'Save Settings'}
+              </button>
+              <button
+                onClick={() => setShowBulkWarmupModal(false)}
+                disabled={updatingBulkSettings}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+              >
+                Cancel
               </button>
             </div>
           </div>

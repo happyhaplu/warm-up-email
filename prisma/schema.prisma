@@ -15,12 +15,36 @@ datasource db {
 model User {
   id        String    @id @default(uuid())
   email     String    @unique
+  name      String?
   role      String    @default("user") // "user" or "admin"
+  planId    Int?      @map("plan_id")
+  status    String    @default("active") // "active", "suspended", "deleted"
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   accounts  Account[]
+  auditLogs AuditLog[]
+  plan      Plan?     @relation(fields: [planId], references: [id])
 
   @@map("users")
+}
+
+// Plan model for subscription tiers
+model Plan {
+  id                Int      @id @default(autoincrement())
+  name              String   @unique
+  displayName       String   @map("display_name")
+  description       String?
+  mailboxLimit      Int      @map("mailbox_limit")
+  dailyEmailLimit   Int      @map("daily_email_limit")
+  monthlyEmailLimit Int      @map("monthly_email_limit")
+  price             Decimal  @default(0) @db.Decimal(10, 2)
+  isActive          Boolean  @default(true) @map("is_active")
+  features          String?  // JSON array of features
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  users             User[]
+
+  @@map("plans")
 }
 
 // Account model with user_id for ownership
@@ -52,11 +76,13 @@ model Account {
   @@map("accounts")
 }
 
-// Recipient model (kept for backward compatibility)
+// Recipient model for dedicated recipient pool
 model Recipient {
   id        Int      @id @default(autoincrement())
   email     String   @unique
   name      String?
+  isActive  Boolean  @default(true) @map("is_active") // Can be disabled without deletion
+  tags      String?  // JSON array for categorization
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -130,4 +156,51 @@ model WarmupLog {
 
   @@unique([mailboxId, date])
   @@map("warmup_logs")
+}
+
+// Audit Log model for tracking admin actions
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    String   @map("user_id")
+  action    String   // "user_created", "user_updated", "user_deleted", "user_suspended", "user_reactivated"
+  targetId  String?  @map("target_id") // ID of affected user
+  details   String?  // JSON string with details
+  ipAddress String?  @map("ip_address")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("audit_logs")
+}
+
+// Scheduled Reply model for deferred reply execution
+model ScheduledReply {
+  id            Int       @id @default(autoincrement())
+  accountId     Int       @map("account_id")
+  recipientId   Int?      @map("recipient_id")
+  recipientEmail String   @map("recipient_email")
+  subject       String
+  body          String    @db.Text
+  scheduledFor  DateTime  @map("scheduled_for") // When to send the reply
+  status        String    @default("pending") // "pending", "sent", "failed"
+  metadata      Json?     // Store original message ID and other data
+  sentAt        DateTime? @map("sent_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([scheduledFor, status])
+  @@index([accountId])
+  @@map("scheduled_replies")
+}
+
+// Global Rate Limit tracking
+model RateLimitLog {
+  id        Int      @id @default(autoincrement())
+  timeSlot  DateTime @map("time_slot") // Hourly or minute slot
+  count     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([timeSlot])
+  @@index([timeSlot])
+  @@map("rate_limit_logs")
 }

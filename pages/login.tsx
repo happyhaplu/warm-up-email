@@ -85,9 +85,14 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            📧 Gmail Warmup Tool
-          </h2>
+          <div className="flex items-center justify-center mb-8">
+            <img 
+              src="https://raw.githubusercontent.com/happyhaplu/Outcraftly-assets/main/1764808676915.jpg" 
+              alt="Outcraftly Logo" 
+              className="h-12 w-auto"
+            />
+            <span className="ml-3 text-3xl font-bold text-gray-900">Warmup</span>
+          </div>
           <p className="mt-2 text-center text-sm text-gray-600">
             {isSignUp ? 'Create your account' : 'Sign in to your account'}
           </p>

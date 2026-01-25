@@ -3,39 +3,52 @@
  * Helper functions for gradual ramp-up and randomization
  */
 
+import { WarmupConfig } from './warmup-config';
+
 interface WarmupRampSchedule {
   minDay: number;
   maxDay: number;
   dailyLimit: number;
 }
 
-// Gradual ramp-up schedule (hard-coded)
-const WARMUP_RAMP_SCHEDULE: WarmupRampSchedule[] = [
-  { minDay: 1, maxDay: 3, dailyLimit: 3 },    // Day 1-3: 3 emails/day
-  { minDay: 4, maxDay: 6, dailyLimit: 5 },    // Day 4-6: 5 emails/day
-  { minDay: 7, maxDay: 10, dailyLimit: 7 },   // Day 7-10: 7 emails/day
-  { minDay: 11, maxDay: 14, dailyLimit: 10 }, // Day 11-14: 10 emails/day
-  // Day 15+: uses warmupMaxDaily from account (10-20)
-];
-
 /**
- * Get the daily send limit for a mailbox based on days since warmup start
+ * Calculate the daily send limit based on warmup settings
  * @param daysSinceStart Number of days since warmup began
- * @param maxDaily Maximum daily limit (configured per mailbox)
+ * @param maxDaily Maximum daily limit (0 or -1 for unlimited)
+ * @param startCount Starting daily count
+ * @param increaseBy How much to increase each day
  * @returns Daily send limit for current day
  */
-export function getDailyLimit(daysSinceStart: number, maxDaily: number = 20): number {
+export function getDailyLimit(
+  daysSinceStart: number, 
+  maxDaily: number = WarmupConfig.DEFAULT_MAX_DAILY,
+  startCount: number = WarmupConfig.DEFAULT_START_COUNT,
+  increaseBy: number = WarmupConfig.DEFAULT_INCREASE_BY
+): number {
   if (daysSinceStart < 1) return 0;
 
-  // Find matching schedule
-  for (const schedule of WARMUP_RAMP_SCHEDULE) {
-    if (daysSinceStart >= schedule.minDay && daysSinceStart <= schedule.maxDay) {
-      return schedule.dailyLimit;
-    }
+  // Calculate progressive limit: startCount + (daysSinceStart - 1) * increaseBy
+  const calculatedLimit = startCount + (daysSinceStart - 1) * increaseBy;
+
+  // Handle unlimited case (0 or -1 means unlimited)
+  if (maxDaily === 0 || maxDaily === -1) {
+    return calculatedLimit; // No cap
   }
 
-  // Day 15+: cap at configured max (10-20)
-  return Math.min(maxDaily, 20);
+  // Cap at maxDaily
+  return Math.min(calculatedLimit, maxDaily);
+}
+
+/**
+ * Get random delay between email sends (uses config values)
+ * @returns Random delay in milliseconds
+ */
+export function getRandomSendDelay(): number {
+  const minMinutes = WarmupConfig.SEND_DELAY_MIN;
+  const maxMinutes = WarmupConfig.SEND_DELAY_MAX;
+  const min = minMinutes * 60 * 1000;
+  const max = maxMinutes * 60 * 1000;
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 /**
@@ -51,11 +64,20 @@ export function getRandomOffset(minMinutes: number, maxMinutes: number): number 
 }
 
 /**
- * Get random reply delay in milliseconds (5-240 minutes)
+ * Get random reply delay in milliseconds (uses config values for natural behavior)
  * @returns Random delay in milliseconds
  */
 export function getRandomReplyDelay(): number {
-  return getRandomOffset(5, 240);
+  return getRandomOffset(WarmupConfig.REPLY_DELAY_MIN, WarmupConfig.REPLY_DELAY_MAX);
+}
+
+/**
+ * Get random reply delay in minutes (for display)
+ * @returns Random delay in minutes
+ */
+export function getRandomReplyDelayMinutes(): number {
+  const delayMs = getRandomReplyDelay();
+  return Math.floor(delayMs / (60 * 1000));
 }
 
 /**
@@ -138,14 +160,6 @@ export function randomizeBody(body: string): string {
 }
 
 /**
- * Get a randomized delay before sending next email (to spread out sends)
- * @returns Delay in milliseconds (2-10 minutes)
- */
-export function getRandomSendDelay(): number {
-  return getRandomOffset(2, 10);
-}
-
-/**
  * Check if mailbox should send today based on daily limit and sent count
  * @param sentToday Number of emails sent today
  * @param dailyLimit Current daily limit
@@ -188,4 +202,59 @@ function getNextPhaseDay(currentDay: number): number {
   if (currentDay < 11) return 11;
   if (currentDay < 15) return 15;
   return 15;
+}
+
+/**
+ * Calculate scheduled time for a reply
+ * @param now Current time
+ * @param delayMs Delay in milliseconds
+ * @returns Scheduled date/time
+ */
+export function getScheduledReplyTime(now: Date = new Date(), delayMs?: number): Date {
+  const delay = delayMs || getRandomReplyDelay();
+  return new Date(now.getTime() + delay);
+}
+
+/**
+ * Check if user has exceeded their plan limits
+ * @param usage Current usage
+ * @param planLimits Plan limits
+ * @returns Object indicating if limits are exceeded and which ones
+ */
+export function checkPlanLimits(
+  usage: {
+    mailboxCount: number;
+    dailyEmailsSent: number;
+    monthlyEmailsSent: number;
+  },
+  planLimits: {
+    mailboxLimit: number;
+    dailyEmailLimit: number;
+    monthlyEmailLimit: number;
+  }
+): {
+  exceeded: boolean;
+  mailboxLimitExceeded: boolean;
+  dailyLimitExceeded: boolean;
+  monthlyLimitExceeded: boolean;
+  message?: string;
+} {
+  const mailboxLimitExceeded = usage.mailboxCount >= planLimits.mailboxLimit;
+  const dailyLimitExceeded = usage.dailyEmailsSent >= planLimits.dailyEmailLimit;
+  const monthlyLimitExceeded = usage.monthlyEmailsSent >= planLimits.monthlyEmailLimit;
+
+  const exceeded = mailboxLimitExceeded || dailyLimitExceeded || monthlyLimitExceeded;
+
+  let message = '';
+  if (mailboxLimitExceeded) message = `Mailbox limit reached (${usage.mailboxCount}/${planLimits.mailboxLimit})`;
+  else if (dailyLimitExceeded) message = `Daily email limit reached (${usage.dailyEmailsSent}/${planLimits.dailyEmailLimit})`;
+  else if (monthlyLimitExceeded) message = `Monthly email limit reached (${usage.monthlyEmailsSent}/${planLimits.monthlyEmailLimit})`;
+
+  return {
+    exceeded,
+    mailboxLimitExceeded,
+    dailyLimitExceeded,
+    monthlyLimitExceeded,
+    message,
+  };
 }

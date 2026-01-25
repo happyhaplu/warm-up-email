@@ -68,8 +68,16 @@ export default function ResetPassword() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            🔐 Reset Your Password
+          <div className="flex items-center justify-center mb-8">
+            <img 
+              src="https://raw.githubusercontent.com/happyhaplu/Outcraftly-assets/main/1764808676915.jpg" 
+              alt="Outcraftly Logo" 
+              className="h-12 w-auto"
+            />
+            <span className="ml-3 text-3xl font-bold text-gray-900">Warmup</span>
+          </div>
+          <h2 className="mt-6 text-center text-2xl font-bold text-gray-900">
+            Reset Your Password
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
             Enter your new password below

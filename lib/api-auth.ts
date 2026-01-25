@@ -186,3 +186,16 @@ export function requireAdmin(
     return handler(req, res, user);
   };
 }
+
+/**
+ * Verify admin token and return user (for direct use in API handlers)
+ */
+export async function verifyAdminToken(req: NextApiRequest): Promise<ApiAuthUser | null> {
+  const { user } = await authenticateApiRequest(req);
+  
+  if (!user || user.role !== 'admin') {
+    return null;
+  }
+  
+  return user;
+}

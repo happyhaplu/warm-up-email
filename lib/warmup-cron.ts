@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import imaps from 'imap-simple';
 import prisma from './prisma';
+import { WarmupConfig } from './warmup-config';
 import {
   getDailyLimit,
   getDaysSinceStart,
@@ -10,6 +11,8 @@ import {
   randomizeSubject,
   randomizeBody,
   canSendToday,
+  getScheduledReplyTime,
+  checkPlanLimits,
 } from './warmup-utils';
 
 interface DailyQuotaInfo {
@@ -80,11 +83,55 @@ class WarmupCronService {
   }
 
   /**
+   * Process scheduled replies that are due
+   */
+  private async processScheduledReplies() {
+    try {
+      const now = new Date();
+      const dueReplies = await prisma.scheduledReply.findMany({
+        where: {
+          scheduledFor: { lte: now },
+          status: 'pending',
+        },
+        take: 50, // Process in batches
+      });
+
+      if (dueReplies.length > 0) {
+        console.log(`⏰ Processing ${dueReplies.length} scheduled reply(ies)...`);
+      }
+
+      for (const reply of dueReplies) {
+        try {
+          await this.sendScheduledReply(reply);
+          await prisma.scheduledReply.update({
+            where: { id: reply.id },
+            data: { status: 'sent' },
+          });
+        } catch (error) {
+          console.error(`Failed to send scheduled reply ${reply.id}:`, error);
+          await prisma.scheduledReply.update({
+            where: { id: reply.id },
+            data: { 
+              status: 'failed',
+              metadata: { error: error instanceof Error ? error.message : 'Unknown error' }
+            },
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error processing scheduled replies:', error);
+    }
+  }
+
+  /**
    * Main cycle - check all mailboxes and send if needed
    */
   private async runCycle() {
     try {
       console.log('🔄 Running warmup cycle...');
+
+      // First, process any scheduled replies that are due
+      await this.processScheduledReplies();
 
       // Get all mailboxes with their quota and today's sent count
       const quotaInfo = await this.getMailboxQuotaInfo();
@@ -113,16 +160,24 @@ class WarmupCronService {
       // Randomize order to prevent pattern detection
       const shuffled = [...mailboxesWithQuota].sort(() => Math.random() - 0.5);
 
-      // Send from multiple mailboxes with random delays between sends
+      // Send from multiple mailboxes with random delays between sends (3-15 minutes)
       for (const mailbox of shuffled) {
         if (!canSendToday(mailbox.sentToday, mailbox.dailyQuota)) {
           continue;
         }
 
-        // Add random delay between sends (2-10 minutes)
+        // Check global rate limiting
+        const canSend = await this.checkGlobalRateLimit();
+        if (!canSend) {
+          console.log('⚠️ Global rate limit reached, pausing sends...');
+          break; // Stop sending from all mailboxes
+        }
+
+        // Add random delay between sends (3-15 minutes) except for first email
         if (mailbox !== shuffled[0]) {
-          const delay = getRandomSendDelay();
-          console.log(`⏳ Waiting ${Math.round(delay / 1000 / 60)} minutes before next send...`);
+          const delay = getRandomSendDelay(); // 3-15 minutes
+          const delayMinutes = Math.round(delay / 1000 / 60);
+          console.log(`⏳ Waiting ${delayMinutes} minutes before next send...`);
           await new Promise(resolve => setTimeout(resolve, delay));
         }
 
@@ -147,12 +202,12 @@ class WarmupCronService {
         email: { not: undefined },
         warmupEnabled: true,
       },
-      select: {
-        id: true,
-        email: true,
-        warmupStartDate: true,
-        warmupMaxDaily: true,
-        createdAt: true,
+      include: {
+        user: {
+          include: {
+            plan: true,
+          },
+        },
       },
     });
 
@@ -164,6 +219,49 @@ class WarmupCronService {
     const quotaInfo: DailyQuotaInfo[] = [];
 
     for (const account of accounts) {
+      // Check plan limits if user has a plan
+      if (account.user?.plan) {
+        const mailboxCount = await prisma.account.count({
+          where: { userId: account.userId },
+        });
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+
+        const dailyEmailsSent = await prisma.log.count({
+          where: {
+            senderId: account.id,
+            timestamp: { gte: today, lt: tomorrow },
+            status: 'sent',
+          },
+        });
+
+        const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        const monthlyEmailsSent = await prisma.log.count({
+          where: {
+            senderId: account.id,
+            timestamp: { gte: firstDayOfMonth },
+            status: 'sent',
+          },
+        });
+
+        const limitCheck = checkPlanLimits(
+          { mailboxCount, dailyEmailsSent, monthlyEmailsSent },
+          {
+            mailboxLimit: account.user.plan.mailboxLimit || 999,
+            dailyEmailLimit: account.user.plan.dailyEmailLimit || 9999,
+            monthlyEmailLimit: account.user.plan.monthlyEmailLimit || 99999,
+          }
+        );
+
+        if (limitCheck.exceeded) {
+          console.log(`⚠️ ${account.email}: ${limitCheck.message}`);
+          continue; // Skip this mailbox
+        }
+      }
+
       // Initialize warmup start date if not set
       let warmupStartDate = account.warmupStartDate;
       if (!warmupStartDate) {
@@ -177,8 +275,13 @@ class WarmupCronService {
       // Calculate days since warmup start
       const dayNumber = getDaysSinceStart(warmupStartDate);
       
-      // Get daily limit based on ramp-up schedule
-      const dailyQuota = getDailyLimit(dayNumber, account.warmupMaxDaily);
+      // Get daily limit based on custom ramp-up settings
+      const dailyQuota = getDailyLimit(
+        dayNumber, 
+        account.warmupMaxDaily,
+        account.warmupStartCount,
+        account.warmupIncreaseBy
+      );
 
       // Count emails sent today from this mailbox
       const sentToday = await prisma.log.count({
@@ -192,7 +295,9 @@ class WarmupCronService {
         },
       });
 
-      const remaining = Math.max(0, dailyQuota - sentToday);
+      // Calculate remaining (unlimited if maxDaily is 0 or -1)
+      const isUnlimited = account.warmupMaxDaily === 0 || account.warmupMaxDaily === -1;
+      const remaining = isUnlimited ? dailyQuota : Math.max(0, dailyQuota - sentToday);
 
       // Update or create warmup log for today
       await prisma.warmupLog.upsert({
@@ -245,20 +350,67 @@ class WarmupCronService {
         return false;
       }
 
-      // Get all other mailboxes as potential recipients
-      const recipients = await prisma.account.findMany({
-        where: {
-          id: { not: senderId },
-        },
-      });
+      // Check if we should use dedicated recipient pool
+      let recipient: any;
+      
+      if (WarmupConfig.USE_DEDICATED_RECIPIENT_POOL) {
+        // Use dedicated recipient pool
+        const recipientPool = await prisma.recipient.findMany({
+          where: { isActive: true },
+        });
 
-      if (recipients.length === 0) {
-        console.error('❌ No recipient mailboxes available');
-        return false;
+        if (recipientPool.length === 0) {
+          console.error('❌ No active recipients in dedicated pool');
+          return false;
+        }
+
+        // Pick random from pool
+        recipient = recipientPool[Math.floor(Math.random() * recipientPool.length)];
+      } else {
+        // Use peer-to-peer (other mailboxes)
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+
+        // Get all other mailboxes as potential recipients
+        const allRecipients = await prisma.account.findMany({
+          where: {
+            id: { not: senderId },
+          },
+        });
+
+        if (allRecipients.length === 0) {
+          console.error('❌ No recipient mailboxes available');
+          return false;
+        }
+
+        // Filter out recipients already emailed today (uniqueness check)
+        if (WarmupConfig.PREVENT_DUPLICATE_SENDS_PER_DAY) {
+          const sentToday = await prisma.log.findMany({
+            where: {
+              senderId,
+              timestamp: { gte: today, lt: tomorrow },
+              status: 'sent',
+            },
+            select: { recipientId: true },
+          });
+
+          const sentRecipientIds = new Set(sentToday.map(log => log.recipientId));
+          const availableRecipients = allRecipients.filter(
+            r => !sentRecipientIds.has(r.id)
+          );
+
+          if (availableRecipients.length === 0) {
+            console.log('ℹ️ All available recipients already received email today');
+            return false;
+          }
+
+          recipient = availableRecipients[Math.floor(Math.random() * availableRecipients.length)];
+        } else {
+          recipient = allRecipients[Math.floor(Math.random() * allRecipients.length)];
+        }
       }
-
-      // Pick a random recipient
-      const recipient = recipients[Math.floor(Math.random() * recipients.length)];
 
       // Get a random send template
       const templates = await prisma.sendTemplate.findMany();
@@ -276,8 +428,13 @@ class WarmupCronService {
       console.log(`📧 Sending from ${sender.email} to ${recipient.email}`);
       console.log(`📝 Template: "${randomizedSubject}"`);
 
-      // Create SMTP transporter
-      const transporter = nodemailer.createTransport({
+      // Detect provider for optional enhancements
+      const isOutlook = sender.smtpHost.toLowerCase().includes('outlook') || 
+                        sender.smtpHost.toLowerCase().includes('office365');
+      const isYahoo = sender.smtpHost.toLowerCase().includes('yahoo');
+
+      // Universal robust SMTP configuration for ALL providers
+      const transportOptions: any = {
         host: sender.smtpHost,
         port: sender.smtpPort,
         secure: sender.smtpPort === 465,
@@ -285,7 +442,23 @@ class WarmupCronService {
           user: sender.email,
           pass: sender.appPassword,
         },
-      });
+        connectionTimeout: 15000,
+        greetingTimeout: 10000,
+        socketTimeout: 15000,
+        requireTLS: sender.smtpPort === 587,
+        tls: {
+          ciphers: 'SSLv3',
+          rejectUnauthorized: false,
+          minVersion: 'TLSv1.2'
+        },
+      };
+
+      // Provider-specific enhancements
+      if (isOutlook || isYahoo) {
+        transportOptions.auth.type = 'login';
+      }
+
+      const transporter = nodemailer.createTransport(transportOptions);
 
       // Send email with randomized content
       await transporter.sendMail({
@@ -304,12 +477,16 @@ class WarmupCronService {
           sender: sender.email,
           recipient: recipient.email,
           subject: randomizedSubject,
-          status: 'sent',
+          status: 'SENT',
           notes: 'Automatic warmup email',
         },
       });
 
       console.log('✅ Email sent successfully');
+
+      // Increment rate limit counter
+      await this.incrementRateLimit();
+
       return true;
     } catch (error) {
       console.error('❌ Error sending warmup email:', error);
@@ -322,7 +499,7 @@ class WarmupCronService {
             sender: 'unknown',
             recipient: 'unknown',
             subject: 'Failed warmup email',
-            status: 'failed',
+            status: 'FAILED',
             notes: error instanceof Error ? error.message : 'Unknown error',
           },
         });
@@ -341,6 +518,17 @@ class WarmupCronService {
     try {
       const account = await prisma.account.findUnique({
         where: { id: mailboxId },
+        select: {
+          id: true,
+          email: true,
+          appPassword: true,
+          senderName: true,
+          smtpHost: true,
+          smtpPort: true,
+          imapHost: true,
+          imapPort: true,
+          warmupReplyRate: true, // Include reply rate
+        },
       });
 
       if (!account) {
@@ -410,76 +598,49 @@ class WarmupCronService {
           continue;
         }
 
-        // Add random delay before replying (5-240 minutes for natural behavior)
-        const replyDelay = getRandomReplyDelay();
-        const delayMinutes = Math.round(replyDelay / 1000 / 60);
-        console.log(`💬 Will reply to ${fromEmail} in ${delayMinutes} minutes`);
+        // Check if we should reply based on warmupReplyRate percentage
+        const shouldReply = Math.random() * 100 < account.warmupReplyRate;
+        if (!shouldReply) {
+          console.log(`⏭️ Skipping reply to ${fromEmail} (reply rate: ${account.warmupReplyRate}%)`);
+          await connection.addFlags(message.attributes.uid, '\\Seen');
+          continue;
+        }
+
+        // Calculate when to send the reply (5-240 minutes for natural behavior)
+        const scheduledFor = getScheduledReplyTime();
+        const delayMinutes = Math.round((scheduledFor.getTime() - Date.now()) / 1000 / 60);
+        console.log(`💬 Scheduling reply to ${fromEmail} in ${delayMinutes} minutes (reply rate: ${account.warmupReplyRate}%)`);
         
-        // Store reply task for later (in production, use a job queue)
-        // For now, we'll reply immediately but log the intended delay
-        console.log(`📝 Composing reply to message from ${fromEmail}`);
+        // Get sender mailbox for recipient ID
+        const senderMailbox = await prisma.account.findFirst({
+          where: { email: fromEmail },
+        });
 
         // Pick random reply template
         const replyTemplate = replyTemplates[Math.floor(Math.random() * replyTemplates.length)];
-
-        // Randomize reply content slightly
         const randomizedReply = randomizeBody(replyTemplate.text);
 
-        // Send reply
-        const transporter = nodemailer.createTransport({
-          host: account.smtpHost,
-          port: account.smtpPort,
-          secure: account.smtpPort === 465,
-          auth: {
-            user: account.email,
-            pass: account.appPassword,
+        // Schedule the reply for later
+        await prisma.scheduledReply.create({
+          data: {
+            accountId: account.id,
+            recipientEmail: fromEmail,
+            recipientId: senderMailbox?.id,
+            subject: `Re: ${subject}`,
+            body: randomizedReply,
+            scheduledFor,
+            status: 'pending',
+            metadata: {
+              originalMessageId: header.body['message-id']?.[0],
+              replyRate: account.warmupReplyRate,
+            },
           },
-        });
-
-        await transporter.sendMail({
-          from: account.senderName ? `"${account.senderName}" <${account.email}>` : account.email,
-          to: fromEmail,
-          subject: `Re: ${subject}`,
-          text: randomizedReply,
-          html: randomizedReply.replace(/\n/g, '<br>'),
-          inReplyTo: header.body['message-id']?.[0],
-          references: header.body['message-id']?.[0],
         });
 
         // Mark as seen
         await connection.addFlags(message.attributes.uid, '\\Seen');
 
-        // Log the reply
-        const senderMailbox = await prisma.account.findFirst({
-          where: { email: fromEmail },
-        });
-
-        await prisma.log.create({
-          data: {
-            senderId: account.id,
-            recipientId: senderMailbox?.id,
-            sender: account.email,
-            recipient: fromEmail,
-            subject: `Re: ${subject}`,
-            status: 'replied',
-            notes: `Automatic warmup reply (intended delay: ${delayMinutes}m)`,
-          },
-        });
-
-        // Update warmup log with reply count
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        await prisma.warmupLog.updateMany({
-          where: {
-            mailboxId: account.id,
-            date: today,
-          },
-          data: {
-            repliedCount: { increment: 1 },
-          },
-        });
-
-        console.log('✅ Auto-reply sent');
+        console.log(`✅ Reply scheduled for ${scheduledFor.toLocaleString()}`);
         break; // Only reply to one message per cycle
       }
 
@@ -487,6 +648,138 @@ class WarmupCronService {
     } catch (error) {
       console.error('❌ Error checking inbox:', error);
     }
+  }
+
+  /**
+   * Check global rate limit
+   */
+  private async checkGlobalRateLimit(): Promise<boolean> {
+    try {
+      const now = new Date();
+      const currentHour = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours());
+      const timeSlot = currentHour.toISOString();
+
+      // Get or create rate limit log for current hour
+      const rateLimitLog = await prisma.rateLimitLog.upsert({
+        where: { timeSlot },
+        update: {},
+        create: { timeSlot, count: 0 },
+      });
+
+      // Check if limit exceeded
+      if (rateLimitLog.count >= WarmupConfig.GLOBAL_HOURLY_LIMIT) {
+        return false; // Rate limit exceeded
+      }
+
+      return true; // OK to send
+    } catch (error) {
+      console.error('Error checking rate limit:', error);
+      return true; // On error, allow sending
+    }
+  }
+
+  /**
+   * Increment global rate limit counter
+   */
+  private async incrementRateLimit(): Promise<void> {
+    try {
+      const now = new Date();
+      const currentHour = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours());
+      const timeSlot = currentHour.toISOString();
+
+      await prisma.rateLimitLog.upsert({
+        where: { timeSlot },
+        update: { count: { increment: 1 } },
+        create: { timeSlot, count: 1 },
+      });
+    } catch (error) {
+      console.error('Error incrementing rate limit:', error);
+    }
+  }
+
+  /**
+   * Send a scheduled reply
+   */
+  private async sendScheduledReply(scheduledReply: any): Promise<void> {
+    const account = await prisma.account.findUnique({
+      where: { id: scheduledReply.accountId },
+    });
+
+    if (!account) {
+      throw new Error(`Account ${scheduledReply.accountId} not found`);
+    }
+
+    console.log(`📧 Sending scheduled reply from ${account.email} to ${scheduledReply.recipientEmail}`);
+
+    // Detect provider for optional enhancements
+    const isOutlook = account.smtpHost.toLowerCase().includes('outlook') || 
+                      account.smtpHost.toLowerCase().includes('office365');
+    const isYahoo = account.smtpHost.toLowerCase().includes('yahoo');
+
+    // Universal robust SMTP configuration
+    const transportOptions: any = {
+      host: account.smtpHost,
+      port: account.smtpPort,
+      secure: account.smtpPort === 465,
+      auth: {
+        user: account.email,
+        pass: account.appPassword,
+      },
+      connectionTimeout: 15000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
+      requireTLS: account.smtpPort === 587,
+      tls: {
+        ciphers: 'SSLv3',
+        rejectUnauthorized: false,
+        minVersion: 'TLSv1.2'
+      },
+    };
+
+    // Provider-specific enhancements
+    if (isOutlook || isYahoo) {
+      transportOptions.auth.type = 'login';
+    }
+
+    const transporter = nodemailer.createTransport(transportOptions);
+
+    await transporter.sendMail({
+      from: account.senderName ? `"${account.senderName}" <${account.email}>` : account.email,
+      to: scheduledReply.recipientEmail,
+      subject: scheduledReply.subject,
+      text: scheduledReply.body,
+      html: scheduledReply.body.replace(/\n/g, '<br>'),
+      inReplyTo: scheduledReply.metadata?.originalMessageId,
+      references: scheduledReply.metadata?.originalMessageId,
+    });
+
+    // Log the reply
+    await prisma.log.create({
+      data: {
+        senderId: account.id,
+        recipientId: scheduledReply.recipientId,
+        sender: account.email,
+        recipient: scheduledReply.recipientEmail,
+        subject: scheduledReply.subject,
+        status: 'REPLIED',
+        notes: 'Automatic warmup reply (scheduled)',
+      },
+    });
+
+    // Update warmup log with reply count
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    await prisma.warmupLog.updateMany({
+      where: {
+        mailboxId: account.id,
+        date: today,
+      },
+      data: {
+        repliedCount: { increment: 1 },
+      },
+    });
+
+    console.log('✅ Scheduled reply sent');
   }
 }
 
