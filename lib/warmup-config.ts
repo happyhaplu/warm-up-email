@@ -57,6 +57,60 @@ export const WarmupConfig = {
 
 export type WarmupConfigType = typeof WarmupConfig;
 
+/**
+ * Scalable Warmup Engine Configuration
+ * Production settings for handling thousands of users × 100 mailboxes each
+ */
+export const WarmupEngineConfig = {
+  // Batch Processing
+  BATCH_SIZE: parseInt(process.env.WARMUP_BATCH_SIZE || '100', 10), // Process 100 mailboxes per batch
+  MAX_CONCURRENT_SENDS: parseInt(process.env.WARMUP_MAX_CONCURRENT || '20', 10), // 20 parallel sends
+  BATCH_DELAY_MS: parseInt(process.env.WARMUP_BATCH_DELAY_MS || '5000', 10), // 5s between batches
+  
+  // Send Stagger (natural spacing between initiating sends)
+  SEND_STAGGER_MIN_MS: parseInt(process.env.WARMUP_STAGGER_MIN_MS || '1000', 10), // 1s min
+  SEND_STAGGER_MAX_MS: parseInt(process.env.WARMUP_STAGGER_MAX_MS || '5000', 10), // 5s max
+  
+  // Per-Mailbox Cooldown (prevents same mailbox from sending too frequently)
+  MAILBOX_COOLDOWN_MIN_MS: parseInt(process.env.WARMUP_MAILBOX_COOLDOWN_MIN_MS || '180000', 10), // 3 min minimum gap
+  MAILBOX_COOLDOWN_MAX_MS: parseInt(process.env.WARMUP_MAILBOX_COOLDOWN_MAX_MS || '600000', 10), // 10 min maximum gap
+  MAILBOX_COOLDOWN_RANDOMIZE: process.env.WARMUP_MAILBOX_COOLDOWN_RANDOMIZE !== 'false', // Randomize for natural patterns
+  
+  // Global Safety Limits (system-wide)
+  GLOBAL_HOURLY_LIMIT: parseInt(process.env.WARMUP_GLOBAL_HOURLY_LIMIT || '10000', 10), // 10k/hour system-wide
+  GLOBAL_MINUTE_LIMIT: parseInt(process.env.WARMUP_GLOBAL_MINUTE_LIMIT || '200', 10), // 200/min system-wide
+  
+  // Per-User Caps (enforced at user level across all their mailboxes)
+  USER_HOURLY_LIMIT: parseInt(process.env.WARMUP_USER_HOURLY_LIMIT || '500', 10), // 500/hour per user
+  USER_DAILY_CAP_MULTIPLIER: parseFloat(process.env.WARMUP_USER_DAILY_CAP || '1.2'), // 1.2x plan limit as hard cap
+  
+  // Timeout Settings
+  SMTP_TIMEOUT_MS: parseInt(process.env.WARMUP_SMTP_TIMEOUT_MS || '30000', 10), // 30s SMTP timeout
+  IMAP_TIMEOUT_MS: parseInt(process.env.WARMUP_IMAP_TIMEOUT_MS || '30000', 10), // 30s IMAP timeout
+  
+  // Rate Limit Backoff
+  RATE_LIMIT_BACKOFF_MS: parseInt(process.env.WARMUP_RATE_LIMIT_BACKOFF_MS || '10000', 10), // 10s backoff when rate limited
+  
+  // Monitoring & Metrics
+  METRICS_RETENTION_DAYS: parseInt(process.env.WARMUP_METRICS_RETENTION_DAYS || '30', 10), // Keep 30 days of metrics
+  ENABLE_DETAILED_METRICS: process.env.WARMUP_ENABLE_DETAILED_METRICS !== 'false', // Default enabled
+  
+  // Quota Enforcement
+  MIN_DAILY_QUOTA_PER_MAILBOX: parseInt(process.env.WARMUP_MIN_DAILY_QUOTA || '30', 10), // Minimum 30/day per mailbox
+  QUOTA_DEFICIT_PRIORITY_BOOST: parseFloat(process.env.WARMUP_QUOTA_PRIORITY_BOOST || '2.0'), // 2x priority for mailboxes behind quota
+  
+  // Horizontal Scaling
+  ENABLE_DISTRIBUTED_MODE: process.env.WARMUP_DISTRIBUTED_MODE === 'true', // Enable for multi-instance deployment
+  WORKER_ID: process.env.WARMUP_WORKER_ID || '1', // Worker identifier for distributed systems
+  WORKER_COUNT: parseInt(process.env.WARMUP_WORKER_COUNT || '1', 10), // Total workers in cluster
+  
+  // Cron Schedule
+  CRON_INTERVAL_MINUTES: parseInt(process.env.WARMUP_CRON_INTERVAL_MINUTES || '15', 10), // Run every 15 minutes
+  CRON_SPREAD_WINDOW_MINUTES: parseInt(process.env.WARMUP_CRON_SPREAD_MINUTES || '10', 10), // Spread sends over 10min window
+} as const;
+
+export type WarmupEngineConfigType = typeof WarmupEngineConfig;
+
 // Validation
 export function validateWarmupSettings(settings: {
   warmupStartCount?: number;

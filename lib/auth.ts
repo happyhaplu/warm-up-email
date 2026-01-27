@@ -1,7 +1,7 @@
 import { supabase } from './supabase';
 import prisma from './prisma';
 
-// Temporary admin credentials (will be replaced with Supabase Auth + roles)
+// Temporary admin credentials (fallback if Supabase auth fails)
 const TEMP_ADMIN = {
   email: 'happy.outcraftly@zohomail.in',
   password: 'System@123321',
@@ -67,11 +67,18 @@ export async function authenticateUser(
     });
 
     if (!dbUser) {
+      // Auto-assign admin role for specific emails
+      const isAdmin = [
+        'happy.outcraftly@zohomail.in',
+        'admin@outcraftly.com',
+      ].includes(data.user.email!);
+
       dbUser = await prisma.user.create({
         data: {
           id: data.user.id,
           email: data.user.email!,
-          role: 'user',
+          role: isAdmin ? 'admin' : 'user',
+          status: 'active',
         },
       });
     }
@@ -103,13 +110,39 @@ export async function signUpUser(
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
+      options: {
+        emailRedirectTo: 'http://localhost:3000/auth/callback',
+      }
     });
 
     if (error) {
       return { success: false, error: error.message };
     }
 
-    // User will be created in DB after email confirmation
+    // Create user in DB immediately if signup successful
+    if (data.user) {
+      const existingUser = await prisma.user.findUnique({
+        where: { email: data.user.email! }
+      });
+
+      if (!existingUser) {
+        // Auto-assign admin role for specific emails
+        const isAdmin = [
+          'happy.outcraftly@zohomail.in',
+          'admin@outcraftly.com',
+        ].includes(data.user.email!);
+
+        await prisma.user.create({
+          data: {
+            id: data.user.id,
+            email: data.user.email!,
+            role: isAdmin ? 'admin' : 'user',
+            status: 'active',
+          },
+        });
+      }
+    }
+
     return { success: true };
   } catch (error) {
     return {

@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: warmup-auto-scaler
+  labels:
+    app: warmup-auto-scaler
+spec:
+  replicas: 1  # Only 1 auto-scaler needed
+  selector:
+    matchLabels:
+      app: warmup-auto-scaler
+  template:
+    metadata:
+      labels:
+        app: warmup-auto-scaler
+    spec:
+      serviceAccountName: warmup-auto-scaler
+      containers:
+      - name: auto-scaler
+        image: warmup-app:latest
+        command: ["npx", "tsx", "scripts/auto-scaler-daemon.ts"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: warmup-secrets
+              key: database-url
+        - name: DIRECT_URL
+          valueFrom:
+            secretKeyRef:
+              name: warmup-secrets
+              key: direct-url
+        - name: AUTO_SCALER_ENABLED
+          value: "true"
+        - name: AUTO_SCALER_CHECK_INTERVAL_MS
+          value: "300000"  # 5 minutes
+        - name: AUTO_SCALER_MAILBOXES_PER_WORKER
+          value: "1000"
+        - name: AUTO_SCALER_MIN_WORKERS
+          value: "1"
+        - name: AUTO_SCALER_MAX_WORKERS
+          value: "100"
+        - name: AUTO_SCALER_SCALE_UP_THRESHOLD
+          value: "0.8"
+        - name: AUTO_SCALER_SCALE_DOWN_THRESHOLD
+          value: "0.3"
+        - name: AUTO_SCALER_PLATFORM
+          value: "kubernetes"
+        - name: AUTO_SCALER_K8S_NAMESPACE
+          value: "default"
+        - name: AUTO_SCALER_K8S_DEPLOYMENT_NAME
+          value: "warmup-workers"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: warmup-auto-scaler
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: warmup-auto-scaler-role
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments", "deployments/scale"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: warmup-auto-scaler-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: warmup-auto-scaler-role
+subjects:
+- kind: ServiceAccount
+  name: warmup-auto-scaler

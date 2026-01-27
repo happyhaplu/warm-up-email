@@ -3,8 +3,10 @@ import { supabase } from '../../../lib/supabase';
 import prisma from '../../../lib/prisma';
 import { initializeWarmupCron } from '../../../lib/warmup-auto-init';
 
-// Initialize warmup cron on first API call
-initializeWarmupCron();
+// Initialize warmup cron on first API call (production only)
+if (process.env.NODE_ENV === 'production') {
+  initializeWarmupCron();
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {

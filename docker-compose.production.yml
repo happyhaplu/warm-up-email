@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # Generate 100 workers
+  # Usage: docker-compose up -d
+  
+  worker-1:
+    build: .
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - DIRECT_URL=${DIRECT_URL}
+      - WARMUP_DISTRIBUTED_MODE=true
+      - WARMUP_WORKER_COUNT=100
+      - WARMUP_WORKER_ID=1
+      - WARMUP_BATCH_SIZE=200
+      - WARMUP_MAX_CONCURRENT=50
+      - WARMUP_CRON_INTERVAL_MINUTES=10
+      - WARMUP_GLOBAL_HOURLY_LIMIT=150000
+      - WARMUP_MAILBOX_COOLDOWN_MIN_MS=120000
+    restart: unless-stopped
+    networks:
+      - warmup-network
+
+  worker-2:
+    build: .
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - DIRECT_URL=${DIRECT_URL}
+      - WARMUP_DISTRIBUTED_MODE=true
+      - WARMUP_WORKER_COUNT=100
+      - WARMUP_WORKER_ID=2
+      - WARMUP_BATCH_SIZE=200
+      - WARMUP_MAX_CONCURRENT=50
+      - WARMUP_CRON_INTERVAL_MINUTES=10
+      - WARMUP_GLOBAL_HOURLY_LIMIT=150000
+      - WARMUP_MAILBOX_COOLDOWN_MIN_MS=120000
+    restart: unless-stopped
+    networks:
+      - warmup-network
+
+  # Add workers 3-100 following the same pattern
+  # Or use docker-compose scale (see README)
+
+  # Monitoring dashboard (optional)
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - warmup-network
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - warmup-network
+
+networks:
+  warmup-network:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:

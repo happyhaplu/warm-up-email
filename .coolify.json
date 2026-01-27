@@ -1,0 +1,25 @@
+{
+  "name": "email-warmup",
+  "build": {
+    "command": "npm run build",
+    "environment": {
+      "NODE_ENV": "production"
+    }
+  },
+  "deploy": {
+    "command": "npm start",
+    "port": 3000,
+    "healthcheck": {
+      "path": "/api/warmup/status",
+      "interval": 30,
+      "timeout": 10,
+      "retries": 3
+    }
+  },
+  "hooks": {
+    "postDeploy": [
+      "npx prisma migrate deploy",
+      "npx prisma generate"
+    ]
+  }
+}

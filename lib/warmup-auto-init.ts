@@ -8,6 +8,11 @@ let warmupInitialized = false;
  * Only initializes once, subsequent calls are no-op
  */
 export async function initializeWarmupCron() {
+  // Don't initialize during build or development
+  if (process.env.NODE_ENV !== 'production' || process.env.NEXT_PHASE === 'phase-production-build') {
+    return;
+  }
+
   if (warmupInitialized) {
     return;
   }
@@ -23,8 +28,8 @@ export async function initializeWarmupCron() {
   }
 }
 
-// Auto-initialize on module load (server-side only)
-if (typeof window === 'undefined') {
+// Auto-initialize on module load (server-side only, production only)
+if (typeof window === 'undefined' && process.env.NODE_ENV === 'production' && process.env.NEXT_PHASE !== 'phase-production-build') {
   // Delay initialization to ensure database is ready
   setTimeout(() => {
     initializeWarmupCron();

@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  # Auto-Scaler Daemon - Monitors and scales workers
+  auto-scaler:
+    build: .
+    container_name: warmup-auto-scaler
+    environment:
+      # Database
+      DATABASE_URL: ${DATABASE_URL}
+      DIRECT_URL: ${DIRECT_URL}
+      
+      # Supabase
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      
+      # Auto-Scaler Configuration
+      AUTO_SCALER_ENABLED: "true"
+      AUTO_SCALER_CHECK_INTERVAL_MS: "300000" # 5 minutes
+      AUTO_SCALER_MAILBOXES_PER_WORKER: "1000"
+      AUTO_SCALER_MIN_WORKERS: "1"
+      AUTO_SCALER_MAX_WORKERS: "100"
+      AUTO_SCALER_SCALE_UP_THRESHOLD: "0.8"    # 80%
+      AUTO_SCALER_SCALE_DOWN_THRESHOLD: "0.3"  # 30%
+      AUTO_SCALER_PLATFORM: "docker"
+      AUTO_SCALER_DOCKER_COMPOSE_FILE: "/app/docker-compose.auto-scale.yml"
+      AUTO_SCALER_DOCKER_SERVICE_NAME: "warmup-worker"
+    
+    command: npx tsx scripts/auto-scaler-daemon.ts
+    
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # Docker socket for scaling
+      - ./docker-compose.auto-scale.yml:/app/docker-compose.auto-scale.yml
+    
+    restart: unless-stopped
+    
+    networks:
+      - warmup-network
+
+  # Warmup Worker - Will be auto-scaled
+  warmup-worker:
+    build: .
+    environment:
+      # Database
+      DATABASE_URL: ${DATABASE_URL}
+      DIRECT_URL: ${DIRECT_URL}
+      
+      # Supabase
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      
+      # Warmup Configuration
+      NODE_ENV: production
+      WARMUP_ENABLE_DISTRIBUTED_MODE: "true"
+      WARMUP_WORKER_COUNT: "1" # Will be updated by auto-scaler
+      WARMUP_BATCH_SIZE: "100"
+      WARMUP_MAX_CONCURRENT: "20"
+      WARMUP_MAILBOX_COOLDOWN_MIN_MS: "180000"
+      WARMUP_MAILBOX_COOLDOWN_MAX_MS: "600000"
+    
+    command: node -r ts-node/register lib/warmup-cron.ts
+    
+    restart: unless-stopped
+    
+    networks:
+      - warmup-network
+    
+    # Start with 1 worker, auto-scaler will add more as needed
+    # docker-compose up -d --scale warmup-worker=1
+
+networks:
+  warmup-network:
+    driver: bridge
