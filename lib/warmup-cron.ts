@@ -357,6 +357,10 @@ class WarmupCronService {
    * Send a warmup email from specified mailbox
    */
   private async sendWarmupEmail(senderId: number): Promise<boolean> {
+    let senderEmail = 'unknown';
+    let recipientEmail = 'unknown';
+    let recipientId: number | null = null;
+
     try {
       // Get sender account with user and plan info
       const sender = await prisma.account.findUnique({
@@ -374,6 +378,8 @@ class WarmupCronService {
         console.error(`❌ Sender mailbox ${senderId} not found`);
         return false;
       }
+
+      senderEmail = sender.email;
 
       // ENFORCE PLAN LIMITS: Check user's total daily/monthly limits across ALL mailboxes
       if (sender.user?.plan && sender.userId) {
@@ -488,6 +494,10 @@ class WarmupCronService {
         }
       }
 
+      // Capture recipient info for error logging
+      recipientEmail = recipient.email;
+      recipientId = recipient.id;
+
       // Get a random send template
       const templates = await prisma.sendTemplate.findMany();
       if (templates.length === 0) {
@@ -565,15 +575,16 @@ class WarmupCronService {
 
       return true;
     } catch (error) {
-      console.error('❌ Error sending warmup email:', error);
+      console.error(`❌ Error sending warmup email from ${senderEmail} to ${recipientEmail}:`, error);
       
-      // Log the failure
+      // Log the failure with actual sender/recipient info
       try {
         await prisma.log.create({
           data: {
             senderId,
-            sender: 'unknown',
-            recipient: 'unknown',
+            recipientId,
+            sender: senderEmail,
+            recipient: recipientEmail,
             subject: 'Failed warmup email',
             status: 'FAILED',
             notes: error instanceof Error ? error.message : 'Unknown error',

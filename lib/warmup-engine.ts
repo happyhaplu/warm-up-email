@@ -425,10 +425,12 @@ export class WarmupEngine {
    */
   private async sendWarmupEmail(job: MailboxJob): Promise<SendResult> {
     const startTime = Date.now();
+    let recipient: any = null;
+    let sender: any = null;
     
     try {
       // Get sender account
-      const sender = await prisma.account.findUnique({
+      sender = await prisma.account.findUnique({
         where: { id: job.mailboxId },
       });
 
@@ -437,7 +439,7 @@ export class WarmupEngine {
       }
 
       // Get random recipient (different from sender)
-      const recipient = await this.getRandomRecipient(job.mailboxId);
+      recipient = await this.getRandomRecipient(job.mailboxId);
       if (!recipient) {
         throw new Error('No suitable recipient found');
       }
@@ -534,18 +536,21 @@ export class WarmupEngine {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error(`❌ ${job.email}: ${errorMessage}`);
 
-      // Log failure
+      // Use the recipient email if it was already selected, otherwise indicate failure stage
+      const recipientEmail = recipient?.email || 'Error before recipient selection';
+
+      // Log failure with detailed information
       await prisma.log.create({
         data: {
           senderId: job.mailboxId,
           sender: job.email,
-          recipient: 'unknown',
+          recipient: recipientEmail,
           subject: 'Failed warmup send',
           status: 'FAILED',
-          notes: errorMessage,
+          notes: errorMessage.length > 500 ? errorMessage.substring(0, 500) + '...' : errorMessage,
         },
-      }).catch(() => {
-        // Ignore log failures
+      }).catch((logError) => {
+        console.error('Failed to log error:', logError.message);
       });
 
       await this.metrics.recordEmailFailed(job.mailboxId, job.email, errorMessage);
