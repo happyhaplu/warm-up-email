@@ -12,16 +12,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
         orderBy: { createdAt: 'desc' },
       });
 
+      // Get today's date range for sentToday calculation
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
       // Get logs statistics for each account
       const mailboxes = await Promise.all(accounts.map(async (account) => {
         const logs = await prisma.log.findMany({
           where: { senderId: account.id },
-          select: { status: true },
+          select: { status: true, timestamp: true },
         });
 
         const totalSent = logs.filter(log => log.status === 'SENT' || log.status === 'REPLIED').length;
         const totalFailed = logs.filter(log => log.status === 'FAILED').length;
         const totalReplied = logs.filter(log => log.status === 'REPLIED').length;
+        
+        // Count only warmup sends today (SENT status only, not REPLIED)
+        const sentToday = logs.filter(log => 
+          (log.status === 'SENT' || log.status === 'sent') && 
+          log.timestamp >= today && 
+          log.timestamp < tomorrow
+        ).length;
         
         // Calculate deliverability: (successful / total) * 100
         const totalAttempts = totalSent + totalFailed;
@@ -54,6 +67,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
           replyRate,
           totalSent,
           totalFailed,
+          sentToday, // Today's warmup sends only
           emailsSent: totalSent,
           totalReceived: 0, // TODO: Get from logs
           totalReplied: totalReplied,
@@ -365,42 +379,34 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
 
       if (warmupStartCount !== undefined) {
         const start = parseInt(warmupStartCount);
-        if (start < 1 || start > 100) {
-          return res.status(400).json({ error: 'Start count must be between 1 and 100' });
+        if (start < 1 || start > 10) {
+          return res.status(400).json({ error: 'Start count must be between 1 and 10' });
         }
         updateData.warmupStartCount = start;
       }
 
       if (warmupIncreaseBy !== undefined) {
         const increase = parseInt(warmupIncreaseBy);
-        if (increase < 0 || increase > 50) {
-          return res.status(400).json({ error: 'Increase must be between 0 and 50' });
+        if (increase < 1 || increase > 5) {
+          return res.status(400).json({ error: 'Increase must be between 1 and 5' });
         }
         updateData.warmupIncreaseBy = increase;
       }
 
       if (warmupMaxDaily !== undefined) {
         const max = parseInt(warmupMaxDaily);
-        if (max !== 0 && max !== -1 && (max < 1 || max > 1000)) {
-          return res.status(400).json({ error: 'Max daily must be between 1-1000, or 0/-1 for unlimited' });
+        if (max < 5 || max > 20) {
+          return res.status(400).json({ error: 'Maximum daily must be between 5 and 20' });
         }
         updateData.warmupMaxDaily = max;
       }
 
       if (warmupReplyRate !== undefined) {
         const rate = parseInt(warmupReplyRate);
-        if (rate < 0 || rate > 100) {
-          return res.status(400).json({ error: 'Reply rate must be between 0 and 100' });
+        if (rate < 25 || rate > 45) {
+          return res.status(400).json({ error: 'Reply rate must be between 25 and 45' });
         }
         updateData.warmupReplyRate = rate;
-      }
-
-      if (dailyWarmupQuota !== undefined) {
-        const quota = parseInt(dailyWarmupQuota);
-        if (quota < 0 || quota > 1000) {
-          return res.status(400).json({ error: 'Daily quota must be between 0 and 1000' });
-        }
-        updateData.dailyWarmupQuota = quota;
       }
 
       // Bulk update

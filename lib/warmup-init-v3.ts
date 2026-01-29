@@ -43,10 +43,12 @@ export async function initializeScalableWarmup() {
   }
 }
 
-// Auto-initialize only in production runtime (not during build or test)
+// Auto-initialize disabled to prevent Next.js conflicts
+// Use POST /api/warmup/trigger to manually start the warmup system
+// Or set WARMUP_AUTO_START=true in environment variables
 if (process.env.NODE_ENV === 'production' && 
     process.env.NEXT_PHASE !== 'phase-production-build' && 
-    process.env.WARMUP_AUTO_START !== 'false') {
+    process.env.WARMUP_AUTO_START === 'true') {
   initializeScalableWarmup().catch(err => {
     console.error('❌ Warmup initialization error:', err);
   });

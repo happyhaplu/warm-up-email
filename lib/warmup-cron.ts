@@ -243,7 +243,7 @@ class WarmupCronService {
         where: {
           senderId: { in: userMailboxIds },
           timestamp: { gte: today, lt: tomorrow },
-          status: { in: ['SENT', 'REPLIED'] },
+          status: { in: ['SENT', 'sent', 'REPLIED', 'replied'] },
         },
       });
 
@@ -253,7 +253,7 @@ class WarmupCronService {
         where: {
           senderId: { in: userMailboxIds },
           timestamp: { gte: firstDayOfMonth },
-          status: { in: ['SENT', 'REPLIED'] },
+          status: { in: ['SENT', 'sent', 'REPLIED', 'replied'] },
         },
       });
 
@@ -301,7 +301,7 @@ class WarmupCronService {
         account.warmupIncreaseBy
       );
 
-      // Count emails sent today from this mailbox
+      // Count emails sent today from this mailbox (ONLY warmup emails, NOT auto-replies)
       const sentToday = await prisma.log.count({
         where: {
           senderId: account.id,
@@ -309,7 +309,7 @@ class WarmupCronService {
             gte: today,
             lt: tomorrow,
           },
-          status: 'sent',
+          status: { in: ['SENT', 'sent'] },
         },
       });
 

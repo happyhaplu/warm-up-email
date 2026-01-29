@@ -1,12 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../lib/supabase';
 import prisma from '../../../lib/prisma';
-import { initializeWarmupCron } from '../../../lib/warmup-auto-init';
+// Warmup auto-init removed - use POST /api/warmup/trigger instead
 
-// Initialize warmup cron on first API call (production only)
-if (process.env.NODE_ENV === 'production') {
-  initializeWarmupCron();
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {

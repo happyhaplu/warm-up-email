@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireAdmin, ApiAuthUser } from '../../../lib/api-auth';
-import { warmupCron } from '../../../lib/warmup-cron';
+import { warmupCron } from '../../../lib/warmup-cron-v3';
 
 async function handler(req: NextApiRequest, res: NextApiResponse, _user: ApiAuthUser): Promise<void> {
   const { method } = req;
@@ -13,7 +13,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse, _user: ApiAuth
 
         res.status(200).json({
           success: true,
-          message: 'Warmup cron service started',
+          message: 'Warmup cron service started (v3)',
           status: warmupCron.getStatus(),
         });
         return;

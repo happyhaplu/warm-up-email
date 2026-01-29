@@ -7,11 +7,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     switch (method) {
       case 'GET':
-        // Get all accounts
+        // Get all accounts with quota information
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        
         const accounts = await prisma.account.findMany({
           orderBy: { createdAt: 'desc' }
         });
-        return res.status(200).json(accounts);
+        
+        // Enrich with today's sent count (ONLY warmup emails, NOT auto-replies)
+        const enrichedAccounts = await Promise.all(
+          accounts.map(async (account) => {
+            const sentToday = await prisma.log.count({
+              where: {
+                senderId: account.id,
+                timestamp: { gte: today, lt: tomorrow },
+                status: { in: ['SENT', 'sent'] }
+              }
+            });
+            
+            return {
+              ...account,
+              sentToday,
+              dailyQuota: account.warmupMaxDaily
+            };
+          })
+        );
+        
+        return res.status(200).json(enrichedAccounts);
 
       case 'POST':
         // Create new account

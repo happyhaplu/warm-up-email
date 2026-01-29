@@ -20,6 +20,7 @@ interface Mailbox {
   replyRate: number;
   totalSent: number;
   totalFailed: number;
+  sentToday?: number; // Today's warmup sends
   warmupStartCount?: number;
   warmupIncreaseBy?: number;
   warmupReplyRate?: number;
@@ -97,12 +98,10 @@ export default function UserDashboard() {
   const [deletingBulk, setDeletingBulk] = useState(false);
   const [showBulkWarmupModal, setShowBulkWarmupModal] = useState(false);
   const [bulkEditSettings, setBulkEditSettings] = useState({
-    warmupEnabled: true,
     warmupStartCount: 3,
     warmupIncreaseBy: 3,
-    warmupMaxDaily: 20,
+    warmupMaxDaily: 10,
     warmupReplyRate: 35,
-    dailyWarmupQuota: 20,
   });
   const [updatingBulkSettings, setUpdatingBulkSettings] = useState(false);
   const [togglingWarmup, setTogglingWarmup] = useState<Set<number>>(new Set());
@@ -1097,6 +1096,28 @@ user2@gmail.com,yyyy yyyy yyyy yyyy,User Two,smtp.gmail.com,587,imap.gmail.com,9
                               <td className="px-6 py-4">
                                 <div className="text-sm font-medium text-gray-900">{mailbox.email}</div>
                                 <div className="text-xs text-gray-500">{mailbox.senderName || 'No name'}</div>
+                                <div className="flex gap-3 mt-2">
+                                  <div className="text-xs">
+                                    <span className="text-gray-600">Daily Limit:</span>{' '}
+                                    <span className="font-medium text-blue-600">{mailbox.warmupMaxDaily}/day</span>
+                                  </div>
+                                  <div className="text-xs">
+                                    <span className="text-gray-600">Today:</span>{' '}
+                                    <span className={`font-medium ${
+                                      (mailbox.sentToday || 0) >= mailbox.warmupMaxDaily 
+                                        ? 'text-red-600' 
+                                        : (mailbox.sentToday || 0) >= mailbox.warmupMaxDaily * 0.8 
+                                          ? 'text-yellow-600' 
+                                          : 'text-green-600'
+                                    }`}>
+                                      {mailbox.sentToday || 0}/{mailbox.warmupMaxDaily}
+                                    </span>
+                                  </div>
+                                  <div className="text-xs">
+                                    <span className="text-gray-600">Total:</span>{' '}
+                                    <span className="font-medium text-gray-700">{mailbox.totalSent || 0}</span>
+                                  </div>
+                                </div>
                               </td>
                               <td className="px-6 py-4">
                                 <div className="flex items-center">
@@ -1401,139 +1422,93 @@ user2@gmail.com,yyyy yyyy yyyy yyyy,User Two,smtp.gmail.com,587,imap.gmail.com,9
       {showBulkWarmupModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              Bulk Edit Warmup Settings
-            </h3>
+            <h3 className="text-xl font-bold mb-4">🔥 Warmup Settings</h3>
             <p className="text-sm text-gray-600 mb-6">
               Update warmup settings for {selectedMailboxes.size} selected mailbox(es)
             </p>
             
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Enable Warmup
-                </label>
-                <select
-                  value={bulkEditSettings.warmupEnabled ? 'true' : 'false'}
-                  onChange={(e) => setBulkEditSettings({
-                    ...bulkEditSettings,
-                    warmupEnabled: e.target.value === 'true'
-                  })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="true">✓ Enabled</option>
-                  <option value="false">✗ Disabled</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Start with emails/day (Recommended: 3)
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Start with emails/day (Recommended 3)
                 </label>
                 <input
                   type="number"
                   min="1"
-                  max="100"
+                  max="10"
                   value={bulkEditSettings.warmupStartCount}
                   onChange={(e) => setBulkEditSettings({
                     ...bulkEditSettings,
-                    warmupStartCount: parseInt(e.target.value) || 1
+                    warmupStartCount: parseInt(e.target.value) || 3
                   })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="3"
+                  className="w-full p-2 border rounded"
                 />
-                <p className="text-xs text-gray-500 mt-1">How many emails to send on day 1</p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Increase by (Recommended: 3)
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Increase by emails every day (Recommended 3)
                 </label>
                 <input
                   type="number"
-                  min="0"
-                  max="50"
+                  min="1"
+                  max="5"
                   value={bulkEditSettings.warmupIncreaseBy}
                   onChange={(e) => setBulkEditSettings({
                     ...bulkEditSettings,
-                    warmupIncreaseBy: parseInt(e.target.value) || 0
+                    warmupIncreaseBy: parseInt(e.target.value) || 3
                   })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="3"
+                  className="w-full p-2 border rounded"
                 />
-                <p className="text-xs text-gray-500 mt-1">Daily email increase amount</p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Maximum emails/day (Recommended: 20)
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Maximum emails to be sent per day (Recommended 10)
                 </label>
                 <input
                   type="number"
-                  min="-1"
-                  max="1000"
+                  min="5"
+                  max="20"
                   value={bulkEditSettings.warmupMaxDaily}
                   onChange={(e) => setBulkEditSettings({
                     ...bulkEditSettings,
-                    warmupMaxDaily: parseInt(e.target.value) || 0
+                    warmupMaxDaily: parseInt(e.target.value) || 10
                   })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="20"
+                  className="w-full p-2 border rounded"
                 />
-                <p className="text-xs text-gray-500 mt-1">Set to 0 or -1 for unlimited</p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Reply rate % (Recommended: 35%)
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Reply rate 25-45% (Recommended 35%)
                 </label>
                 <input
                   type="number"
-                  min="0"
-                  max="100"
+                  min="25"
+                  max="45"
                   value={bulkEditSettings.warmupReplyRate}
                   onChange={(e) => setBulkEditSettings({
                     ...bulkEditSettings,
-                    warmupReplyRate: parseInt(e.target.value) || 0
+                    warmupReplyRate: parseInt(e.target.value) || 35
                   })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="35"
+                  className="w-full p-2 border rounded"
                 />
-                <p className="text-xs text-gray-500 mt-1">Percentage of emails that get replies (0-100%)</p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Daily Warmup Quota (Current Day Limit)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  max="1000"
-                  value={bulkEditSettings.dailyWarmupQuota}
-                  onChange={(e) => setBulkEditSettings({
-                    ...bulkEditSettings,
-                    dailyWarmupQuota: parseInt(e.target.value) || 0
-                  })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="20"
-                />
-                <p className="text-xs text-gray-500 mt-1">Current day email quota (updates today's limit immediately)</p>
               </div>
             </div>
 
-            <div className="mt-6 flex gap-3">
+            <div className="flex gap-3 mt-6">
               <button
                 onClick={handleBulkWarmupUpdate}
                 disabled={updatingBulkSettings}
-                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
               >
                 {updatingBulkSettings ? 'Saving...' : 'Save Settings'}
               </button>
               <button
                 onClick={() => setShowBulkWarmupModal(false)}
                 disabled={updatingBulkSettings}
-                className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50"
               >
                 Cancel
               </button>

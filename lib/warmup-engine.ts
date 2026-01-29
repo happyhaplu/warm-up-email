@@ -206,12 +206,12 @@ export class WarmupEngine {
         account.warmupIncreaseBy
       );
 
-      // Count sent today (normalize status to uppercase)
+      // Count sent today (ONLY warmup emails, NOT auto-replies)
       const sentToday = await prisma.log.count({
         where: {
           senderId: account.id,
           timestamp: { gte: today, lt: tomorrow },
-          status: { in: ['SENT', 'sent', 'REPLIED', 'replied'] },
+          status: { in: ['SENT', 'sent'] },
         },
       });
 

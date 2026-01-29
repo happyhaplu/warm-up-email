@@ -3,8 +3,13 @@ import type { AppProps } from 'next/app';
 import { AuthProvider } from '../lib/auth-context';
 import { useEffect } from 'react';
 
-// Initialize scalable warmup system (production only, not during build)
-if (typeof window === 'undefined' && process.env.NODE_ENV === 'production' && process.env.NEXT_PHASE !== 'phase-production-build') {
+// Initialize scalable warmup system - DISABLED to prevent Next.js conflicts
+// Use POST /api/warmup/trigger to manually start the warmup system
+// Or set WARMUP_AUTO_START=true in environment variables to enable
+if (typeof window === 'undefined' && 
+    process.env.NODE_ENV === 'production' && 
+    process.env.NEXT_PHASE !== 'phase-production-build' &&
+    process.env.WARMUP_AUTO_START === 'true') {
   // Server-side only
   import('../lib/warmup-init-v3').then(({ initializeScalableWarmup }) => {
     initializeScalableWarmup();

@@ -28,8 +28,13 @@ export async function initializeWarmupCron() {
   }
 }
 
-// Auto-initialize on module load (server-side only, production only)
-if (typeof window === 'undefined' && process.env.NODE_ENV === 'production' && process.env.NEXT_PHASE !== 'phase-production-build') {
+// Auto-initialization DISABLED - use v3 system or manual trigger
+// Use POST /api/warmup/trigger to manually start the warmup system
+// Or set WARMUP_AUTO_START=true in environment variables
+if (typeof window === 'undefined' && 
+    process.env.NODE_ENV === 'production' && 
+    process.env.NEXT_PHASE !== 'phase-production-build' &&
+    process.env.WARMUP_AUTO_START_V1 === 'true') {
   // Delay initialization to ensure database is ready
   setTimeout(() => {
     initializeWarmupCron();

@@ -16,33 +16,38 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       totalUsers,
       sendTemplates,
       replyTemplates,
-      logs,
-      logsToday,
     ] = await Promise.all([
       prisma.account.count(),
       prisma.user.count(),
       prisma.sendTemplate.count(),
       prisma.replyTemplate.count(),
-      prisma.log.findMany({
-        select: {
-          status: true,
-        },
-      }),
-      prisma.log.count({
-        where: {
-          timestamp: {
-            gte: todayStart,
-            lte: todayEnd,
-          },
-        },
-      }),
     ]);
 
-    // Calculate stats from logs
-    const totalSent = logs.filter((log) => log.status === 'SENT' || log.status === 'REPLIED').length;
-    const totalReplies = logs.filter((log) => log.status === 'REPLIED').length;
-    const failures = logs.filter((log) => log.status === 'FAILED').length;
+    // Get stats from WarmupLogs (aggregated historical data)
+    const allWarmupLogs = await prisma.warmupLog.findMany({
+      select: {
+        sentCount: true,
+        repliedCount: true,
+      },
+    });
+
+    const totalSent = allWarmupLogs.reduce((sum, log) => sum + (log.sentCount || 0), 0);
+    const totalReplies = allWarmupLogs.reduce((sum, log) => sum + (log.repliedCount || 0), 0);
     const replyRate = totalSent > 0 ? Math.round((totalReplies / totalSent) * 100) : 0;
+
+    // Get today's activity from real-time logs
+    const todayLogs = await prisma.log.findMany({
+      where: {
+        timestamp: {
+          gte: todayStart,
+          lte: todayEnd,
+        },
+      },
+      select: { status: true },
+    });
+
+    const logsToday = todayLogs.length;
+    const failures = todayLogs.filter((log) => log.status === 'FAILED').length;
 
     const stats = {
       totalAccounts,

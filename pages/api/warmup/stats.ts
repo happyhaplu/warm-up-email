@@ -48,53 +48,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
           warmupPhase = scheduleInfo.phase;
         }
 
-        // Count sent emails today
-        const sentToday = await prisma.log.count({
-          where: {
-            senderId: account.id,
-            timestamp: {
-              gte: today,
-              lt: tomorrow,
-            },
-            status: 'sent',
-          },
-        });
-
-        // Get last sent time
-        const lastSent = await prisma.log.findFirst({
-          where: {
-            senderId: account.id,
-            status: 'sent',
-          },
-          orderBy: {
-            timestamp: 'desc',
-          },
-          select: {
-            timestamp: true,
-          },
-        });
-
-        // Count total sent (all time)
-        const totalSent = await prisma.log.count({
-          where: {
-            senderId: account.id,
-            status: 'sent',
-          },
-        });
-
-        // Count replies sent today
-        const repliesToday = await prisma.log.count({
-          where: {
-            senderId: account.id,
-            timestamp: {
-              gte: today,
-              lt: tomorrow,
-            },
-            status: 'replied',
-          },
-        });
-
-        // Get warmup log for today
+        // Get warmup log for today (primary source)
         const warmupLog = await prisma.warmupLog.findUnique({
           where: {
             mailboxId_date: {
@@ -103,6 +57,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
             },
           },
         });
+
+        const sentToday = warmupLog?.sentCount || 0;
+        const repliesToday = warmupLog?.repliedCount || 0;
+
+        // Get total sent from all warmup logs
+        const allWarmupLogs = await prisma.warmupLog.findMany({
+          where: { mailboxId: account.id },
+          select: { sentCount: true, updatedAt: true },
+        });
+
+        const totalSent = allWarmupLogs.reduce((sum, log) => sum + (log.sentCount || 0), 0);
+        const lastSent = allWarmupLogs.length > 0 
+          ? allWarmupLogs.reduce((latest, log) => 
+              log.updatedAt > latest ? log.updatedAt : latest, 
+              allWarmupLogs[0].updatedAt
+            )
+          : null;
 
         return {
           mailboxId: account.id,
@@ -117,7 +88,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
           repliesToday,
           remaining: Math.max(0, dailyLimit - sentToday),
           totalSent,
-          lastSentAt: lastSent?.timestamp || null,
+          lastSentAt: lastSent || null,
           percentComplete: dailyLimit > 0 ? Math.round((sentToday / dailyLimit) * 100) : 0,
           warmupLog: warmupLog ? {
             dayNumber: warmupLog.dayNumber,

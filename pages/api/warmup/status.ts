@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { warmupCron } from '../../../lib/warmup-cron';
+import { warmupCron } from '../../../lib/warmup-cron-v3';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {

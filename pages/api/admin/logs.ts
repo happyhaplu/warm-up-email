@@ -3,16 +3,23 @@ import { requireAdmin } from '../../../lib/api-auth';
 import prisma from '../../../lib/prisma';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
-  try {
-    const logs = await prisma.log.findMany({
-      orderBy: { timestamp: 'desc' },
-      take: 200,
-    });
+  const { method } = req;
 
-    res.status(200).json(logs);
+  try {
+    if (method === 'GET') {
+      // Get all logs with optional filtering
+      const logs = await prisma.log.findMany({
+        orderBy: { timestamp: 'desc' },
+        take: 1000, // Increased limit for global logs
+      });
+
+      res.status(200).json(logs);
+    } else {
+      res.status(405).json({ error: 'Method not allowed' });
+    }
   } catch (error) {
-    console.error('Error fetching logs:', error);
-    res.status(500).json({ error: 'Failed to fetch logs' });
+    console.error('Error handling logs:', error);
+    res.status(500).json({ error: 'Failed to process request' });
   }
 }
 

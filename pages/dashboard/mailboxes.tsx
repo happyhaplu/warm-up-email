@@ -12,6 +12,13 @@ interface Account {
   imapHost: string;
   imapPort: number;
   createdAt: string;
+  warmupEnabled?: boolean;
+  warmupMaxDaily?: number;
+  warmupStartCount?: number;
+  warmupIncreaseBy?: number;
+  warmupStartDate?: string;
+  sentToday?: number;
+  dailyQuota?: number;
 }
 
 export default function Mailboxes() {
@@ -561,8 +568,8 @@ user2@gmail.com,yyyy yyyy yyyy yyyy,Jane Smith,smtp.gmail.com,587,imap.gmail.com
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sender Name</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SMTP</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IMAP</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Daily Quota</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Today</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
@@ -601,11 +608,34 @@ user2@gmail.com,yyyy yyyy yyyy yyyy,Jane Smith,smtp.gmail.com,587,imap.gmail.com
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {account.senderName || '—'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {account.smtpHost}:{account.smtpPort}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {account.warmupEnabled ? (
+                        <span className="font-medium">
+                          Limit: {account.warmupMaxDaily || 0}/day
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">Disabled</span>
+                      )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {account.imapHost}:{account.imapPort}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      {account.warmupEnabled ? (
+                        <div className="flex items-center gap-2">
+                          <span className={`font-medium ${
+                            (account.sentToday || 0) >= (account.warmupMaxDaily || 0)
+                              ? 'text-red-600'
+                              : (account.sentToday || 0) >= (account.warmupMaxDaily || 0) * 0.8
+                              ? 'text-yellow-600'
+                              : 'text-green-600'
+                          }`}>
+                            {account.sentToday || 0}/{account.warmupMaxDaily || 0}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            ({Math.max(0, (account.warmupMaxDaily || 0) - (account.sentToday || 0))} left)
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {new Date(account.createdAt).toLocaleDateString()}

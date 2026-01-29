@@ -20,39 +20,44 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
     });
     const accountIds = accounts.map((a) => a.id);
 
-    // Get today's start and end
+    // Get today's date for today's warmup logs
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    // Get this month's start and end
+    // Get this month's start
     const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
     const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 1);
 
-    // Count daily emails sent (today)
-    const dailyEmailsSent = await prisma.log.count({
+    // Get today's activity from WarmupLog (aggregated data)
+    const todayWarmupLogs = await prisma.warmupLog.findMany({
       where: {
-        senderId: { in: accountIds },
-        timestamp: {
-          gte: today,
-          lt: tomorrow,
-        },
-        status: { in: ['SENT', 'REPLIED'] },
+        mailboxId: { in: accountIds },
+        date: today,
       },
+      select: { sentCount: true, repliedCount: true },
     });
 
-    // Count monthly emails sent (this month)
-    const monthlyEmailsSent = await prisma.log.count({
+    const dailyEmailsSent = todayWarmupLogs.reduce((sum, log) => 
+      sum + (log.sentCount || 0) + (log.repliedCount || 0), 0
+    );
+
+    // Get this month's activity from WarmupLog
+    const monthlyWarmupLogs = await prisma.warmupLog.findMany({
       where: {
-        senderId: { in: accountIds },
-        timestamp: {
+        mailboxId: { in: accountIds },
+        date: {
           gte: monthStart,
           lt: monthEnd,
         },
-        status: { in: ['SENT', 'REPLIED'] },
       },
+      select: { sentCount: true, repliedCount: true },
     });
+
+    const monthlyEmailsSent = monthlyWarmupLogs.reduce((sum, log) => 
+      sum + (log.sentCount || 0) + (log.repliedCount || 0), 0
+    );
 
     res.status(200).json({
       mailboxCount,

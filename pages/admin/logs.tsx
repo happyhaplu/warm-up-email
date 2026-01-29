@@ -22,6 +22,8 @@ export default function AdminLogs() {
   const [filter, setFilter] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [dateRange, setDateRange] = useState<'all' | 'today' | 'week' | 'month'>('all');
+  const [clearing, setClearing] = useState(false);
+  const [cleanupInfo, setCleanupInfo] = useState<{ oldLogs: number; totalLogs: number } | null>(null);
   const redirectedRef = useRef(false);
 
   useEffect(() => {
@@ -40,6 +42,7 @@ export default function AdminLogs() {
     }
 
     loadLogs();
+    loadCleanupInfo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.role, initialized]);
 
@@ -56,6 +59,51 @@ export default function AdminLogs() {
       console.error('Error loading logs:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadCleanupInfo = async () => {
+    try {
+      const res = await authFetch('/api/admin/cleanup-logs');
+      if (res.ok) {
+        const data = await res.json();
+        setCleanupInfo(data);
+      }
+    } catch (error) {
+      console.error('Error loading cleanup info:', error);
+    }
+  };
+
+  const handleCleanupOldLogs = async () => {
+    if (!cleanupInfo || cleanupInfo.oldLogs === 0) {
+      alert('ℹ️ No logs older than 30 days found.');
+      return;
+    }
+
+    if (!confirm(`⚠️ Delete ${cleanupInfo.oldLogs} log(s) older than 30 days?\n\nThis will keep:\n✅ Recent logs (last 30 days)\n✅ All account data\n✅ Monthly reports\n✅ Quota tracking\n\nClick OK to proceed.`)) {
+      return;
+    }
+
+    try {
+      setClearing(true);
+      const res = await authFetch('/api/admin/cleanup-logs', {
+        method: 'POST',
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        alert(`✅ ${data.message}`);
+        loadLogs();
+        loadCleanupInfo();
+      } else {
+        const error = await res.json();
+        alert(`❌ Error: ${error.error || 'Failed to cleanup logs'}`);
+      }
+    } catch (error) {
+      console.error('Error cleaning up logs:', error);
+      alert('❌ Failed to cleanup logs. Please try again.');
+    } finally {
+      setClearing(false);
     }
   };
 
@@ -132,7 +180,15 @@ export default function AdminLogs() {
       <div className="min-h-screen bg-gray-50 p-8">
         <div className="max-w-7xl mx-auto">
           <div className="flex justify-between items-center mb-8">
-            <h1 className="text-3xl font-bold text-gray-900">Global Logs</h1>
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">Global Logs</h1>
+              <p className="text-sm text-gray-500 mt-1">
+                🧹 Auto-cleanup: Logs older than 30 days are deleted daily
+              </p>
+              <p className="text-xs text-amber-600 mt-1">
+                ⚠️ Note: Logs are needed for reports, quota tracking, and statistics
+              </p>
+            </div>
             <button
               onClick={() => router.push('/admin/dashboard')}
               className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-800"
@@ -140,6 +196,33 @@ export default function AdminLogs() {
               Back to Dashboard
             </button>
           </div>
+
+          {/* Cleanup Info Banner */}
+          {cleanupInfo && cleanupInfo.oldLogs > 0 && (
+            <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <div className="flex-shrink-0">
+                    <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                  </div>0 days can be cleaned up (keeps monthly reports)
+                  <div className="ml-3">
+                    <p className="text-sm text-yellow-700">
+                      <strong>{cleanupInfo.oldLogs}</strong> log(s) older than 3 days can be cleaned up
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleCleanupOldLogs}
+                  disabled={clearing}
+                  className="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 disabled:opacity-50 text-sm"
+                >
+                  {clearing ? 'Cleaning...' : '🗑️ Cleanup Old Logs'}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Stats Cards */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -192,7 +275,8 @@ export default function AdminLogs() {
               {/* Refresh */}
               <button
                 onClick={loadLogs}
-                className="px-4 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+                disabled={clearing}
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
               >
                 ↻ Refresh
               </button>

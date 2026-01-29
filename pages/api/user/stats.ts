@@ -12,22 +12,37 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
 
     const accountIds = accounts.map((a) => a.id);
 
-    // Get logs for user's accounts
-    const logs = await prisma.log.findMany({
+    // Get warmup logs for user's accounts (preserved historical data)
+    const warmupLogs = await prisma.warmupLog.findMany({
       where: {
-        OR: [
-          { senderId: { in: accountIds } },
-          { recipientId: { in: accountIds } },
-        ],
+        mailboxId: { in: accountIds },
+      },
+      select: { 
+        sentCount: true,
+        repliedCount: true,
+      },
+    });
+
+    // Calculate stats from aggregated warmup logs
+    const totalSent = warmupLogs.reduce((sum, log) => sum + (log.sentCount || 0), 0);
+    const totalReplies = warmupLogs.reduce((sum, log) => sum + (log.repliedCount || 0), 0);
+    const replyRate = totalSent > 0 ? Math.round((totalReplies / totalSent) * 100) : 0;
+
+    // Get today's activity from Log table if available
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const todayLogs = await prisma.log.findMany({
+      where: {
+        senderId: { in: accountIds },
+        timestamp: { gte: today, lt: tomorrow },
       },
       select: { status: true },
     });
 
-    // Calculate stats
-    const totalSent = logs.filter((log) => log.status === 'SENT' || log.status === 'REPLIED').length;
-    const totalReplies = logs.filter((log) => log.status === 'REPLIED').length;
-    const failures = logs.filter((log) => log.status === 'FAILED').length;
-    const replyRate = totalSent > 0 ? Math.round((totalReplies / totalSent) * 100) : 0;
+    const failures = todayLogs.filter((log) => log.status === 'FAILED').length;
 
     res.status(200).json({
       totalSent,

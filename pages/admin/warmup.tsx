@@ -36,6 +36,14 @@ export default function WarmupControl() {
 
     checkStatus();
     loadStats();
+
+    // Auto-refresh status every 10 seconds
+    const statusInterval = setInterval(() => {
+      checkStatus();
+      loadStats();
+    }, 10000);
+
+    return () => clearInterval(statusInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.role, initialized]);
 
@@ -45,7 +53,7 @@ export default function WarmupControl() {
       if (res.ok) {
         const data = await res.json();
         setIsRunning(data.running);
-        setLastRun(data.lastRun || null);
+        setLastRun(data.lastRunTime || data.lastRun || null);
       }
     } catch (error) {
       console.error('Error checking status:', error);
@@ -86,9 +94,11 @@ export default function WarmupControl() {
       });
 
       if (res.ok) {
+        const data = await res.json();
         setIsRunning(true);
         alert('Warmup started successfully!');
-        checkStatus();
+        await checkStatus();
+        await loadStats();
       } else {
         const error = await res.json();
         alert(`Failed to start: ${error.error}`);
@@ -113,8 +123,11 @@ export default function WarmupControl() {
       });
 
       if (res.ok) {
+        const data = await res.json();
         setIsRunning(false);
         alert('Warmup stopped successfully!');
+        await checkStatus();
+        await loadStats();
       } else {
         const error = await res.json();
         alert(`Failed to stop: ${error.error}`);
